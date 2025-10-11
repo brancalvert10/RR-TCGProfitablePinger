@@ -117,31 +117,70 @@ def _scrape_ebay_sync(search_queries, max_results):
                 
                 driver.get(search_url)
                 
-                # Wait for results to load
+                # Wait a moment for page to load
+                import time
+                time.sleep(3)
+                
+                # Try multiple selectors to find items
+                items = []
                 try:
-                    WebDriverWait(driver, 8).until(
-                        EC.presence_of_element_located((By.CLASS_NAME, "s-item"))
-                    )
-                except TimeoutException:
-                    print(f"      ⏱️ Timeout - no results found", flush=True)
-                    continue
+                    # Try main selector
+                    items = driver.find_elements(By.CSS_SELECTOR, ".s-item")
+                except:
+                    pass
                 
-                # Find all sold items
-                items = driver.find_elements(By.CLASS_NAME, "s-item")
-                
-                if len(items) <= 1:  # First item is usually a placeholder
-                    print(f"      ❌ No sold items found", flush=True)
-                    continue
-                
-                print(f"      ✓ Found {len(items)-1} items", flush=True)
-                
-                # Extract prices
-                sold_prices = []
-                for item in items[1:max_results+1]:  # Skip first placeholder item
+                if not items:
                     try:
-                        # Try to find price element
-                        price_elem = item.find_element(By.CLASS_NAME, "s-item__price")
-                        price_text = price_elem.text
+                        # Try alternative selector
+                        items = driver.find_elements(By.CSS_SELECTOR, "li.s-item")
+                    except:
+                        pass
+                
+                if not items:
+                    try:
+                        # Try another alternative
+                        items = driver.find_elements(By.XPATH, "//li[contains(@class, 's-item')]")
+                    except:
+                        pass
+                
+                if len(items) <= 1:
+                    print(f"      ❌ No sold items found (found {len(items)} items)", flush=True)
+                    
+                    # Debug: Print page source snippet
+                    try:
+                        page_text = driver.page_source[:500]
+                        print(f"      Debug: Page starts with: {page_text[:100]}...", flush=True)
+                    except:
+                        pass
+                    
+                    continue
+                
+                print(f"      ✓ Found {len(items)-1} items on page", flush=True)
+                
+                # Extract prices - try multiple price selectors
+                sold_prices = []
+                for idx, item in enumerate(items[1:max_results+1]):  # Skip first placeholder item
+                    try:
+                        price_text = None
+                        
+                        # Try different price selectors
+                        try:
+                            price_elem = item.find_element(By.CSS_SELECTOR, ".s-item__price")
+                            price_text = price_elem.text
+                        except:
+                            try:
+                                price_elem = item.find_element(By.XPATH, ".//span[contains(@class, 's-item__price')]")
+                                price_text = price_elem.text
+                            except:
+                                try:
+                                    # Try getting any price-like text
+                                    price_elem = item.find_element(By.XPATH, ".//span[contains(text(), '£')]")
+                                    price_text = price_elem.text
+                                except:
+                                    continue
+                        
+                        if not price_text:
+                            continue
                         
                         # Extract price using regex
                         matches = re.findall(r'£([\d,]+\.?\d*)', price_text)
@@ -150,13 +189,15 @@ def _scrape_ebay_sync(search_queries, max_results):
                             price = float(matches[0].replace(',', ''))
                             if 10 < price < 10000:  # Sanity check
                                 sold_prices.append(price)
-                    except NoSuchElementException:
-                        continue
-                    except ValueError:
+                                
+                    except Exception as e:
                         continue
                 
+                print(f"      Extracted {len(sold_prices)} prices from items", flush=True)
+                
                 if sold_prices:
-                    print(f"      ✅ SUCCESS! Extracted {len(sold_prices)} valid prices", flush=True)
+                    print(f"      ✅ SUCCESS! Got {len(sold_prices)} valid prices", flush=True)
+                    print(f"      Sample prices: {sold_prices[:5]}", flush=True)
                     
                     # Calculate statistics
                     avg_price = statistics.mean(sold_prices)
@@ -174,10 +215,12 @@ def _scrape_ebay_sync(search_queries, max_results):
                         'query_used': query
                     }, median_price, len(sold_prices)
                 else:
-                    print(f"      ⚠️ Items found but no valid prices", flush=True)
+                    print(f"      ⚠️ Items found but couldn't extract valid prices", flush=True)
                     
             except Exception as e:
                 print(f"      💥 Error: {e}", flush=True)
+                import traceback
+                traceback.print_exc()
                 continue
         
         print(f"   ✗ No results from any search variation", flush=True)
