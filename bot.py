@@ -115,89 +115,100 @@ def _scrape_ebay_sync(search_queries, max_results):
                 # Build eBay sold listings URL
                 search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(query)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
                 
+                print(f"      Loading: {search_url}", flush=True)
                 driver.get(search_url)
                 
-                # Wait a moment for page to load
+                # Wait longer for JavaScript to load
                 import time
-                time.sleep(3)
+                time.sleep(5)
                 
-                # Try multiple selectors to find items
-                items = []
+                # Debug: Check page title
                 try:
-                    # Try main selector
-                    items = driver.find_elements(By.CSS_SELECTOR, ".s-item")
+                    page_title = driver.title
+                    print(f"      Page title: {page_title}", flush=True)
                 except:
                     pass
                 
+                # Try to find the results section with various selectors
+                items = []
+                
+                # Method 1: Try ul.srp-results
+                try:
+                    results_list = driver.find_element(By.CSS_SELECTOR, "ul.srp-results")
+                    items = results_list.find_elements(By.TAG_NAME, "li")
+                    print(f"      Method 1: Found {len(items)} items via ul.srp-results", flush=True)
+                except Exception as e:
+                    print(f"      Method 1 failed: {e}", flush=True)
+                
+                # Method 2: Try data-testid
                 if not items:
                     try:
-                        # Try alternative selector
-                        items = driver.find_elements(By.CSS_SELECTOR, "li.s-item")
-                    except:
-                        pass
+                        items = driver.find_elements(By.CSS_SELECTOR, "[data-testid='item-card']")
+                        print(f"      Method 2: Found {len(items)} items via data-testid", flush=True)
+                    except Exception as e:
+                        print(f"      Method 2 failed: {e}", flush=True)
                 
+                # Method 3: Try div with specific class patterns
                 if not items:
                     try:
-                        # Try another alternative
-                        items = driver.find_elements(By.XPATH, "//li[contains(@class, 's-item')]")
-                    except:
-                        pass
+                        items = driver.find_elements(By.CSS_SELECTOR, "div.s-item__wrapper")
+                        print(f"      Method 3: Found {len(items)} items via s-item__wrapper", flush=True)
+                    except Exception as e:
+                        print(f"      Method 3 failed: {e}", flush=True)
                 
-                if len(items) <= 1:
-                    print(f"      ❌ No sold items found (found {len(items)} items)", flush=True)
+                # Method 4: Any list item in results area
+                if not items:
+                    try:
+                        items = driver.find_elements(By.XPATH, "//li[contains(@class, 'item')]")
+                        print(f"      Method 4: Found {len(items)} items via XPath", flush=True)
+                    except Exception as e:
+                        print(f"      Method 4 failed: {e}", flush=True)
+                
+                if len(items) == 0:
+                    print(f"      ❌ No items found with any method", flush=True)
                     
-                    # Debug: Print page source snippet
+                    # Debug: Save page source snippet
                     try:
-                        page_text = driver.page_source[:500]
-                        print(f"      Debug: Page starts with: {page_text[:100]}...", flush=True)
+                        page_snippet = driver.page_source[1000:2000]
+                        print(f"      Page snippet: ...{page_snippet}...", flush=True)
                     except:
                         pass
                     
                     continue
                 
-                print(f"      ✓ Found {len(items)-1} items on page", flush=True)
+                print(f"      ✓ Processing {len(items)} items", flush=True)
                 
-                # Extract prices - try multiple price selectors
+                # Extract prices from items
                 sold_prices = []
-                for idx, item in enumerate(items[1:max_results+1]):  # Skip first placeholder item
+                for idx, item in enumerate(items[:max_results]):
                     try:
-                        price_text = None
+                        # Get all text from item
+                        item_text = item.text
                         
-                        # Try different price selectors
-                        try:
-                            price_elem = item.find_element(By.CSS_SELECTOR, ".s-item__price")
-                            price_text = price_elem.text
-                        except:
-                            try:
-                                price_elem = item.find_element(By.XPATH, ".//span[contains(@class, 's-item__price')]")
-                                price_text = price_elem.text
-                            except:
-                                try:
-                                    # Try getting any price-like text
-                                    price_elem = item.find_element(By.XPATH, ".//span[contains(text(), '£')]")
-                                    price_text = price_elem.text
-                                except:
-                                    continue
-                        
-                        if not price_text:
+                        if not item_text:
                             continue
                         
-                        # Extract price using regex
-                        matches = re.findall(r'£([\d,]+\.?\d*)', price_text)
+                        # Look for prices in the text
+                        matches = re.findall(r'£([\d,]+\.?\d*)', item_text)
+                        
                         if matches:
-                            # Clean price (remove commas)
-                            price = float(matches[0].replace(',', ''))
-                            if 10 < price < 10000:  # Sanity check
-                                sold_prices.append(price)
-                                
+                            for match in matches:
+                                try:
+                                    price = float(match.replace(',', ''))
+                                    if 10 < price < 10000:  # Sanity check
+                                        sold_prices.append(price)
+                                        break  # Only take first valid price per item
+                                except ValueError:
+                                    continue
+                                    
                     except Exception as e:
                         continue
                 
-                print(f"      Extracted {len(sold_prices)} prices from items", flush=True)
+                print(f"      Extracted {len(sold_prices)} prices from {len(items)} items", flush=True)
                 
                 if sold_prices:
                     print(f"      ✅ SUCCESS! Got {len(sold_prices)} valid prices", flush=True)
-                    print(f"      Sample prices: {sold_prices[:5]}", flush=True)
+                    print(f"      Sample prices: £{sold_prices[0]:.2f}, £{sold_prices[1]:.2f}..." if len(sold_prices) >= 2 else f"      Prices: {sold_prices}", flush=True)
                     
                     # Calculate statistics
                     avg_price = statistics.mean(sold_prices)
