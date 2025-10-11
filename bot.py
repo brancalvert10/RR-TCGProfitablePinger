@@ -431,21 +431,34 @@ async def create_alert_embed(original_embed, source_message):
 async def on_ready():
     print(f'{bot.user} is now monitoring for deals!')
     print(f'Watching channel ID: {MONITORED_CHANNEL_ID}')
+    print(f'Ping role ID: {PING_ROLE_ID}')
     print(f'eBay API integration: {"✓ Active" if EBAY_APP_ID else "✗ Not configured"}')
+    print('Bot is ready and waiting for embeds...')
 
 @bot.event
 async def on_message(message):
+    # Debug: Log ALL messages in monitored channel
+    if message.channel.id == MONITORED_CHANNEL_ID:
+        print(f"DEBUG: Message received in monitored channel from {message.author}")
+        print(f"DEBUG: Has embeds: {len(message.embeds)}")
+        print(f"DEBUG: Message author is bot: {message.author.bot}")
+        print(f"DEBUG: Message author is me: {message.author == bot.user}")
+    
     # Only monitor the specific channel
     if message.channel.id != MONITORED_CHANNEL_ID:
         return
     
-    # Ignore bot's own messages
+    # Ignore ONLY our own messages (not all bots)
     if message.author == bot.user:
+        print("DEBUG: Ignoring my own message")
         return
     
     # Check if message has embeds
     if not message.embeds:
+        print("DEBUG: No embeds found in message")
         return
+    
+    print(f"✓ Processing {len(message.embeds)} embed(s) from {message.author}!")
     
     # Process each embed
     for embed in message.embeds:
