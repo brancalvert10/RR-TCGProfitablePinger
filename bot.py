@@ -144,6 +144,8 @@ async def get_ebay_sold_prices(product_name, max_results=20):
             if not search_query:
                 continue
             
+            print(f"  [{i}/{len(search_queries)}] Searching for: '{query}'...", flush=True)
+            
             params = {
                 'OPERATION-NAME': 'findCompletedItems',
                 'SERVICE-VERSION': '1.0.0',
@@ -161,24 +163,30 @@ async def get_ebay_sold_prices(product_name, max_results=20):
             }
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(EBAY_FINDING_API, params=params, timeout=10) as response:
+                async with session.get(EBAY_FINDING_API, params=params, timeout=15) as response:
+                    print(f"      Response status: {response.status}", flush=True)
+                    
                     if response.status == 200:
                         data = await response.json()
+                        print(f"      Got JSON response", flush=True)
                         
                         # Parse response
                         search_result = data.get('findCompletedItemsResponse', [{}])[0]
                         
                         # Check for API errors
                         ack = search_result.get('ack', [''])[0]
+                        print(f"      API Acknowledgement: {ack}", flush=True)
+                        
                         if ack == 'Failure':
                             error_msg = search_result.get('errorMessage', [{}])[0]
-                            print(f"  [{i}/{len(search_queries)}] ❌ API error for '{query}': {error_msg}", flush=True)
+                            print(f"      ❌ API ERROR: {error_msg}", flush=True)
                             continue
                         
                         items = search_result.get('searchResult', [{}])[0].get('item', [])
+                        print(f"      Found {len(items) if items else 0} items", flush=True)
                         
                         if not items:
-                            print(f"  [{i}/{len(search_queries)}] No results for: '{query}'", flush=True)
+                            print(f"      ❌ No results", flush=True)
                             continue
                         
                         # Extract sold prices
@@ -191,7 +199,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                                 sold_prices.append(price)
                         
                         if sold_prices:
-                            print(f"  [{i}/{len(search_queries)}] ✓ SUCCESS! Found {len(sold_prices)} sales using: '{query}'", flush=True)
+                            print(f"      ✅ SUCCESS! {len(sold_prices)} valid prices found!", flush=True)
                             # Calculate statistics
                             avg_price = statistics.mean(sold_prices)
                             median_price = statistics.median(sold_prices)
@@ -208,7 +216,9 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                                 'query_used': query
                             }, median_price, len(sold_prices)
                         else:
-                            print(f"  [{i}/{len(search_queries)}] ⚠️ Found items but no valid prices for: '{query}'", flush=True)
+                            print(f"      ⚠️ Items found but no valid prices", flush=True)
+                    else:
+                        print(f"      ❌ HTTP Error: {response.status}", flush=True)
         
         except Exception as e:
             print(f"  [{i}/{len(search_queries)}] 💥 Error with query '{query}': {e}", flush=True)
