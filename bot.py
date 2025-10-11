@@ -69,25 +69,20 @@ async def scrape_ebay_sold_prices(product_name, max_results=15):
     """Scrape eBay sold listings using Selenium"""
     print(f"🔍 Scraping eBay for: '{product_name}'", flush=True)
     
-    # Build 3 search variations max
+    # Build only 2 search variations max (reduced from 3)
     search_queries = []
     cleaned = clean_product_name(product_name)
     search_queries.append(cleaned)
     
     words = cleaned.split()
     if len(words) >= 3:
-        # Try without last word
+        # Just try without last word
         search_queries.append(' '.join(words[:-1]))
-        # Try without first word
-        search_queries.append(' '.join(words[1:]))
-    elif len(words) == 2:
-        # If only 2 words, just try the original
-        pass
     
     # Remove duplicates
     seen = set()
     search_queries = [q for q in search_queries if q and not (q.lower() in seen or seen.add(q.lower()))]
-    search_queries = search_queries[:3]  # Max 3 attempts
+    search_queries = search_queries[:2]  # Max 2 attempts
     
     print(f"   Will try {len(search_queries)} searches: {search_queries}", flush=True)
     
@@ -118,9 +113,9 @@ def _scrape_ebay_sync(search_queries, max_results):
                 print(f"      Loading: {search_url}", flush=True)
                 driver.get(search_url)
                 
-                # Wait longer for JavaScript to load
+                # Wait for page to load - reduced from 5 to 2 seconds
                 import time
-                time.sleep(5)
+                time.sleep(2)
                 
                 # Debug: Check page title
                 try:
@@ -178,9 +173,9 @@ def _scrape_ebay_sync(search_queries, max_results):
                 
                 print(f"      ✓ Processing {len(items)} items", flush=True)
                 
-                # Extract prices from items
+                # Extract prices from items (only process first 12 for speed)
                 sold_prices = []
-                for idx, item in enumerate(items[:max_results]):
+                for idx, item in enumerate(items[:12]):  # Reduced from 15 to 12
                     try:
                         # Get all text from item
                         item_text = item.text
