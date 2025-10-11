@@ -2,11 +2,17 @@ import discord
 from discord.ext import commands
 import re
 from datetime import datetime
-import aiohttp
-import statistics
-from urllib.parse import quote
 import os
 import sys
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import statistics
+from urllib.parse import quote
+import asyncio
 
 # Force stdout to flush immediately
 sys.stdout.reconfigure(line_buffering=True)
@@ -22,213 +28,22 @@ bot = commands.Bot(command_prefix='!', intents=intents)
 MONITORED_CHANNEL_ID = int(os.getenv('MONITORED_CHANNEL_ID', '1417115045573300244'))
 PING_ROLE_ID = int(os.getenv('PING_ROLE_ID', '1400527195679490319'))
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-EBAY_APP_ID = os.getenv('EBAY_APP_ID')
-
-# eBay API Configuration
-EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 
 # Price extraction patterns
 PRICE_PATTERN = r'£(\d+\.?\d*)'
 
-async def get_ebay_current_listings(product_name, max_results=20):
-    """Fetch current active listings to find lowest RRP/retail price"""
-    if not EBAY_APP_ID:
-        return None
+def get_driver():
+    """Initialize headless Chrome driver"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
     
-    try:
-        search_query = product_name.strip()
-        
-        params = {
-            'OPERATION-NAME': 'findItemsAdvanced',
-            'SERVICE-VERSION': '1.0.0',
-            'SECURITY-APPNAME': EBAY_APP_ID,
-            'RESPONSE-DATA-FORMAT': 'JSON',
-            'REST-PAYLOAD': '',
-            'keywords': search_query,
-            'itemFilter(0).name': 'ListingType',
-            'itemFilter(0).value': 'FixedPrice',  # Buy It Now only
-            'itemFilter(1).name': 'Condition',
-            'itemFilter(1).value': 'New',
-            'sortOrder': 'PricePlusShippingLowest',
-            'paginationInput.entriesPerPage': max_results,
-            'GLOBAL-ID': 'EBAY-GB'
-        }
-        
-        async with aiohttp.ClientSession() as session:
-            async with session.get(EBAY_FINDING_API, params=params, timeout=10) as response:
-                if response.status == 200:
-                    data = await response.json()
-                    search_result = data.get('findItemsAdvancedResponse', [{}])[0]
-                    items = search_result.get('searchResult', [{}])[0].get('item', [])
-                    
-                    if items:
-                        # Get prices from current listings
-                        prices = []
-                        for item in items:
-                            selling_status = item.get('sellingStatus', [{}])[0]
-                            price_obj = selling_status.get('convertedCurrentPrice', [{}])[0]
-                            price = float(price_obj.get('__value__', 0))
-                            if price > 0:
-                                prices.append(price)
-                        
-                        if prices:
-                            return min(prices)  # Return lowest current retail price
-                
-                return None
-    
-    except Exception as e:
-        print(f"Error fetching current listings: {e}")
-        return None
-
-async def get_ebay_sold_prices(product_name, max_results=20):
-    """Fetch recent sold prices from eBay with fallback searches"""
-    if not EBAY_APP_ID:
-        print("Warning: EBAY_APP_ID not set")
-        return None, None, 0
-    
-    # Build progressive search variations - from specific to broad
-    search_queries = []
-    
-    # 1. Start with original
-    search_queries.append(product_name)
-    
-    # 2. Clean version (remove special chars, extra spaces)
-    cleaned = re.sub(r'[^\w\s]', ' ', product_name)
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
-    if cleaned != product_name:
-        search_queries.append(cleaned)
-    
-    # 3. Try removing words progressively
-    words = cleaned.split()
-    
-    if len(words) >= 4:
-        # Remove last word
-        search_queries.append(' '.join(words[:-1]))
-        # Remove first word
-        search_queries.append(' '.join(words[1:]))
-        # Remove first and last
-        if len(words) >= 5:
-            search_queries.append(' '.join(words[1:-1]))
-    
-    if len(words) >= 3:
-        # Try just first 3 words
-        search_queries.append(' '.join(words[:3]))
-        # Try just last 3 words
-        search_queries.append(' '.join(words[-3:]))
-        
-    if len(words) >= 2:
-        # Try just first 2 words
-        search_queries.append(' '.join(words[:2]))
-        # Try just last 2 words  
-        search_queries.append(' '.join(words[-2:]))
-    
-    # 4. Remove common filler words
-    filler_words = {'the', 'a', 'an', 'of', 'and', 'with', 'pack', 'packs', 'set', 'bundle'}
-    filtered_words = [w for w in words if w.lower() not in filler_words]
-    if len(filtered_words) >= 2 and filtered_words != words:
-        search_queries.append(' '.join(filtered_words))
-    
-    # Remove duplicates while preserving order
-    seen = set()
-    search_queries = [q for q in search_queries if q and not (q.lower() in seen or seen.add(q.lower()))]
-    
-    # Limit to 10 variations max to avoid excessive API calls
-    search_queries = search_queries[:10]
-    
-    print(f"Trying {len(search_queries)} search variations for: '{product_name}'", flush=True)
-    print(f"Queries to try: {search_queries}", flush=True)
-    
-    for i, query in enumerate(search_queries, 1):
-        try:
-            search_query = query.strip()
-            if not search_query:
-                continue
-            
-            print(f"  [{i}/{len(search_queries)}] Searching for: '{query}'...", flush=True)
-            
-            params = {
-                'OPERATION-NAME': 'findCompletedItems',
-                'SERVICE-VERSION': '1.0.0',
-                'SECURITY-APPNAME': EBAY_APP_ID,
-                'RESPONSE-DATA-FORMAT': 'JSON',
-                'REST-PAYLOAD': '',
-                'keywords': search_query,
-                'itemFilter(0).name': 'SoldItemsOnly',
-                'itemFilter(0).value': 'true',
-                'itemFilter(1).name': 'ListingType',
-                'itemFilter(1).value': 'FixedPrice',  # Buy It Now only
-                'sortOrder': 'EndTimeSoonest',
-                'paginationInput.entriesPerPage': max_results,
-                'GLOBAL-ID': 'EBAY-GB'
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(EBAY_FINDING_API, params=params, timeout=15) as response:
-                    print(f"      Response status: {response.status}", flush=True)
-                    
-                    if response.status == 200:
-                        data = await response.json()
-                        print(f"      Got JSON response", flush=True)
-                        
-                        # Parse response
-                        search_result = data.get('findCompletedItemsResponse', [{}])[0]
-                        
-                        # Check for API errors
-                        ack = search_result.get('ack', [''])[0]
-                        print(f"      API Acknowledgement: {ack}", flush=True)
-                        
-                        if ack == 'Failure':
-                            error_msg = search_result.get('errorMessage', [{}])[0]
-                            print(f"      ❌ API ERROR: {error_msg}", flush=True)
-                            continue
-                        
-                        items = search_result.get('searchResult', [{}])[0].get('item', [])
-                        print(f"      Found {len(items) if items else 0} items", flush=True)
-                        
-                        if not items:
-                            print(f"      ❌ No results", flush=True)
-                            continue
-                        
-                        # Extract sold prices
-                        sold_prices = []
-                        for item in items:
-                            selling_status = item.get('sellingStatus', [{}])[0]
-                            converted_price = selling_status.get('convertedCurrentPrice', [{}])[0]
-                            price = float(converted_price.get('__value__', 0))
-                            if price > 0:
-                                sold_prices.append(price)
-                        
-                        if sold_prices:
-                            print(f"      ✅ SUCCESS! {len(sold_prices)} valid prices found!", flush=True)
-                            # Calculate statistics
-                            avg_price = statistics.mean(sold_prices)
-                            median_price = statistics.median(sold_prices)
-                            min_price = min(sold_prices)
-                            max_price = max(sold_prices)
-                            
-                            return {
-                                'average': avg_price,
-                                'median': median_price,
-                                'min': min_price,
-                                'max': max_price,
-                                'count': len(sold_prices),
-                                'prices': sold_prices,
-                                'query_used': query
-                            }, median_price, len(sold_prices)
-                        else:
-                            print(f"      ⚠️ Items found but no valid prices", flush=True)
-                    else:
-                        print(f"      ❌ HTTP Error: {response.status}", flush=True)
-        
-        except Exception as e:
-            print(f"  [{i}/{len(search_queries)}] 💥 Error with query '{query}': {e}", flush=True)
-            import traceback
-            traceback.print_exc()
-            continue
-    
-    # No results from any query
-    print(f"  ✗ FAILED: No sold items found after {len(search_queries)} attempts", flush=True)
-    return None, None, 0
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
 
 def clean_product_name(name):
     """Clean and optimize product name for eBay search"""
@@ -236,7 +51,7 @@ def clean_product_name(name):
         return name
     
     # Remove common words that might narrow search too much
-    remove_words = ['[TEST]', 'set of', 'bundle', 'official', 'new', 'sealed']
+    remove_words = ['[TEST]', 'set of', 'bundle', 'official']
     cleaned = name
     
     for word in remove_words:
@@ -248,10 +63,129 @@ def clean_product_name(name):
     # Remove extra whitespace
     cleaned = re.sub(r'\s+', ' ', cleaned).strip()
     
-    # For Pokemon products, keep key terms
-    # "Mega Evolutions Booster Box" -> try broader search if no results
-    
     return cleaned
+
+async def scrape_ebay_sold_prices(product_name, max_results=15):
+    """Scrape eBay sold listings using Selenium"""
+    print(f"🔍 Scraping eBay for: '{product_name}'", flush=True)
+    
+    # Build 3 search variations max
+    search_queries = []
+    cleaned = clean_product_name(product_name)
+    search_queries.append(cleaned)
+    
+    words = cleaned.split()
+    if len(words) >= 3:
+        # Try without last word
+        search_queries.append(' '.join(words[:-1]))
+        # Try without first word
+        search_queries.append(' '.join(words[1:]))
+    elif len(words) == 2:
+        # If only 2 words, just try the original
+        pass
+    
+    # Remove duplicates
+    seen = set()
+    search_queries = [q for q in search_queries if q and not (q.lower() in seen or seen.add(q.lower()))]
+    search_queries = search_queries[:3]  # Max 3 attempts
+    
+    print(f"   Will try {len(search_queries)} searches: {search_queries}", flush=True)
+    
+    driver = None
+    try:
+        # Run in executor to not block Discord bot
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(None, _scrape_ebay_sync, search_queries, max_results)
+        return result
+    except Exception as e:
+        print(f"   ❌ Scraping error: {e}", flush=True)
+        return None, None, 0
+
+def _scrape_ebay_sync(search_queries, max_results):
+    """Synchronous eBay scraping function"""
+    driver = None
+    
+    try:
+        driver = get_driver()
+        
+        for i, query in enumerate(search_queries, 1):
+            try:
+                print(f"   [{i}/{len(search_queries)}] Trying: '{query}'", flush=True)
+                
+                # Build eBay sold listings URL
+                search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(query)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
+                
+                driver.get(search_url)
+                
+                # Wait for results to load
+                try:
+                    WebDriverWait(driver, 8).until(
+                        EC.presence_of_element_located((By.CLASS_NAME, "s-item"))
+                    )
+                except TimeoutException:
+                    print(f"      ⏱️ Timeout - no results found", flush=True)
+                    continue
+                
+                # Find all sold items
+                items = driver.find_elements(By.CLASS_NAME, "s-item")
+                
+                if len(items) <= 1:  # First item is usually a placeholder
+                    print(f"      ❌ No sold items found", flush=True)
+                    continue
+                
+                print(f"      ✓ Found {len(items)-1} items", flush=True)
+                
+                # Extract prices
+                sold_prices = []
+                for item in items[1:max_results+1]:  # Skip first placeholder item
+                    try:
+                        # Try to find price element
+                        price_elem = item.find_element(By.CLASS_NAME, "s-item__price")
+                        price_text = price_elem.text
+                        
+                        # Extract price using regex
+                        matches = re.findall(r'£([\d,]+\.?\d*)', price_text)
+                        if matches:
+                            # Clean price (remove commas)
+                            price = float(matches[0].replace(',', ''))
+                            if 10 < price < 10000:  # Sanity check
+                                sold_prices.append(price)
+                    except NoSuchElementException:
+                        continue
+                    except ValueError:
+                        continue
+                
+                if sold_prices:
+                    print(f"      ✅ SUCCESS! Extracted {len(sold_prices)} valid prices", flush=True)
+                    
+                    # Calculate statistics
+                    avg_price = statistics.mean(sold_prices)
+                    median_price = statistics.median(sold_prices)
+                    min_price = min(sold_prices)
+                    max_price = max(sold_prices)
+                    
+                    return {
+                        'average': avg_price,
+                        'median': median_price,
+                        'min': min_price,
+                        'max': max_price,
+                        'count': len(sold_prices),
+                        'prices': sold_prices,
+                        'query_used': query
+                    }, median_price, len(sold_prices)
+                else:
+                    print(f"      ⚠️ Items found but no valid prices", flush=True)
+                    
+            except Exception as e:
+                print(f"      💥 Error: {e}", flush=True)
+                continue
+        
+        print(f"   ✗ No results from any search variation", flush=True)
+        return None, None, 0
+        
+    finally:
+        if driver:
+            driver.quit()
 
 def extract_product_info(embed):
     """Extract product name and price from embed"""
@@ -292,23 +226,11 @@ async def create_alert_embed(original_embed, source_message):
     if not buy_price:
         buy_price = 0
     
-    # Fetch eBay data
-    print(f"Searching eBay for: {product_name}", flush=True)
-    
-    # Get sold prices (for resell estimate)
-    ebay_data, resell_price, sold_count = await get_ebay_sold_prices(product_name)
-    
-    # Get current lowest retail price (for RRP comparison)
-    current_rrp = await get_ebay_current_listings(product_name)
+    # Scrape eBay data
+    ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices(product_name)
     
     # Determine actual cost basis
-    if current_rrp and current_rrp < buy_price:
-        # The listing price is higher than current retail - might be overpriced
-        actual_cost = current_rrp
-        price_warning = True
-    else:
-        actual_cost = buy_price
-        price_warning = False
+    actual_cost = buy_price
     
     # Create new embed
     if ebay_data and resell_price and resell_price > actual_cost:
@@ -361,15 +283,7 @@ async def create_alert_embed(original_embed, source_message):
     
     # Price breakdown
     price_info = []
-    
-    if price_warning:
-        price_info.append(f"⚠️ **Alert Price:** ~~£{buy_price:.2f}~~ (may be overpriced)")
-        price_info.append(f"💡 **Lowest Current Listing:** £{current_rrp:.2f}")
-        price_info.append(f"📊 **Using for calculations:** £{actual_cost:.2f}")
-    else:
-        price_info.append(f"🏷️ **Alert Buy Price:** £{buy_price:.2f}")
-        if current_rrp and current_rrp < buy_price * 0.95:  # Only show if significantly lower
-            price_info.append(f"💡 **FYI: Found cheaper listing:** £{current_rrp:.2f}")
+    price_info.append(f"🏷️ **Alert Buy Price:** £{buy_price:.2f}")
     
     if ebay_data:
         price_info.append(f"📊 **eBay Median Sold:** £{ebay_data['median']:.2f}")
@@ -411,17 +325,14 @@ async def create_alert_embed(original_embed, source_message):
             elif 'http' in field.value:
                 links.append(field.value)
     
-    # Add eBay search links
+    # Add eBay search link
     search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(product_name)}&LH_Sold=1&LH_Complete=1"
     links.append(f"[🔍 eBay Sold Listings]({search_url})")
-    
-    current_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(product_name)}&LH_ItemCondition=1000"
-    links.append(f"[🛒 Current eBay Listings]({current_url})")
     
     if links:
         alert.add_field(
             name="🔗 Links",
-            value="\n".join(links[:7]),
+            value="\n".join(links[:6]),
             inline=False
         )
     
@@ -433,12 +344,10 @@ async def create_alert_embed(original_embed, source_message):
     if original_embed.image:
         alert.set_image(url=original_embed.image.url)
     
-    # Footer with source and warnings
+    # Footer with source
     source_text = original_embed.author.name if original_embed.author else 'Unknown'
     if ebay_data:
         source_text += f" | {sold_count} sales analyzed"
-    if price_warning:
-        source_text += " | ⚠️ Price Alert"
     
     alert.set_footer(text=source_text)
     
@@ -449,9 +358,7 @@ async def on_ready():
     print(f'{bot.user} is now monitoring for deals!', flush=True)
     print(f'Watching channel ID: {MONITORED_CHANNEL_ID}', flush=True)
     print(f'Ping role ID: {PING_ROLE_ID}', flush=True)
-    print(f'eBay API integration: {"✓ Active" if EBAY_APP_ID else "✗ Not configured"}', flush=True)
-    if EBAY_APP_ID:
-        print(f'eBay App ID: {EBAY_APP_ID[:10]}...', flush=True)
+    print('🤖 Using Selenium web scraper (no rate limits!)', flush=True)
     print('Bot is ready and waiting for embeds...', flush=True)
 
 @bot.event
@@ -514,10 +421,10 @@ async def on_message(message):
                     content=alert_text,
                     embed=alert_embed
                 )
-                print(f"Warning: Role {PING_ROLE_ID} not found")
+                print(f"Warning: Role {PING_ROLE_ID} not found", flush=True)
         
         except Exception as e:
-            print(f"Error processing embed: {e}")
+            print(f"Error processing embed: {e}", flush=True)
             import traceback
             traceback.print_exc()
             continue
@@ -525,7 +432,7 @@ async def on_message(message):
 # Health check endpoint for Railway
 @bot.event
 async def on_connect():
-    print("Bot connected to Discord!")
+    print("Bot connected to Discord!", flush=True)
 
 # Run the bot
 if __name__ == "__main__":
