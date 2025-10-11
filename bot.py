@@ -42,6 +42,21 @@ def get_driver():
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
     
+    # Performance optimizations
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_argument('--disable-extensions')
+    chrome_options.add_argument('--disable-infobars')
+    chrome_options.add_argument('--disable-notifications')
+    chrome_options.add_argument('--disable-popup-blocking')
+    
+    # Disable images for faster loading
+    prefs = {
+        'profile.managed_default_content_settings.images': 2,
+        'profile.default_content_setting_values.notifications': 2,
+    }
+    chrome_options.add_experimental_option('prefs', prefs)
+    chrome_options.page_load_strategy = 'eager'  # Don't wait for full page load
+    
     driver = webdriver.Chrome(options=chrome_options)
     return driver
 
@@ -113,9 +128,9 @@ def _scrape_ebay_sync(search_queries, max_results):
                 print(f"      Loading: {search_url}", flush=True)
                 driver.get(search_url)
                 
-                # Wait for page to load - reduced from 5 to 2 seconds
+                # Reduced wait time - page_load_strategy='eager' helps
                 import time
-                time.sleep(2)
+                time.sleep(1.5)
                 
                 # Debug: Check page title
                 try:
@@ -173,9 +188,9 @@ def _scrape_ebay_sync(search_queries, max_results):
                 
                 print(f"      ✓ Processing {len(items)} items", flush=True)
                 
-                # Extract prices from items (only process first 12 for speed)
+                # Extract prices from items (only process first 10 for speed)
                 sold_prices = []
-                for idx, item in enumerate(items[:12]):  # Reduced from 15 to 12
+                for idx, item in enumerate(items[:10]):  # Reduced to 10 for faster processing
                     try:
                         # Get all text from item
                         item_text = item.text
