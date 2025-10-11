@@ -26,6 +26,56 @@ EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 # Price extraction patterns
 PRICE_PATTERN = r'£(\d+\.?\d*)'
 
+async def get_ebay_current_listings(product_name, max_results=20):
+    """Fetch current active listings to find lowest RRP/retail price"""
+    if not EBAY_APP_ID:
+        return None
+    
+    try:
+        search_query = product_name.strip()
+        
+        params = {
+            'OPERATION-NAME': 'findItemsAdvanced',
+            'SERVICE-VERSION': '1.0.0',
+            'SECURITY-APPNAME': EBAY_APP_ID,
+            'RESPONSE-DATA-FORMAT': 'JSON',
+            'REST-PAYLOAD': '',
+            'keywords': search_query,
+            'itemFilter(0).name': 'ListingType',
+            'itemFilter(0).value': 'FixedPrice',
+            'itemFilter(1).name': 'Condition',
+            'itemFilter(1).value': 'New',
+            'sortOrder': 'PricePlusShippingLowest',
+            'paginationInput.entriesPerPage': max_results,
+            'GLOBAL-ID': 'EBAY-GB'
+        }
+        
+        async with aiohttp.ClientSession() as session:
+            async with session.get(EBAY_FINDING_API, params=params, timeout=10) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    search_result = data.get('findItemsAdvancedResponse', [{}])[0]
+                    items = search_result.get('searchResult', [{}])[0].get('item', [])
+                    
+                    if items:
+                        # Get prices from current listings
+                        prices = []
+                        for item in items:
+                            selling_status = item.get('sellingStatus', [{}])[0]
+                            price_obj = selling_status.get('convertedCurrentPrice', [{}])[0]
+                            price = float(price_obj.get('__value__', 0))
+                            if price > 0:
+                                prices.append(price)
+                        
+                        if prices:
+                            return min(prices)  # Return lowest current retail price
+                
+                return None
+    
+    except Exception as e:
+        print(f"Error fetching current listings: {e}")
+        return None
+
 async def get_ebay_sold_prices(product_name, max_results=10):
     """Fetch recent sold prices from eBay"""
     if not EBAY_APP_ID:
@@ -137,15 +187,36 @@ async def create_alert_embed(original_embed, source_message):
     if not buy_price:
         buy_price = 0
     
-    # Fetch eBay sold prices
+    # Fetch eBay data
     print(f"Searching eBay for: {product_name}")
+    
+    # Get sold prices (for resell estimate)
     ebay_data, resell_price, sold_count = await get_ebay_sold_prices(product_name)
     
+    # Get current lowest retail price (for RRP comparison)
+    current_rrp = await get_ebay_current_listings(product_name)
+    
+    # Determine actual cost basis
+    if current_rrp and current_rrp < buy_price:
+        # The listing price is higher than current retail - might be overpriced
+        actual_cost = current_rrp
+        price_warning = True
+    else:
+        actual_cost = buy_price
+        price_warning = False
+    
     # Create new embed
-    if ebay_data and resell_price and resell_price > buy_price:
-        color = discord.Color.green()  # Profitable
-        profit = resell_price - buy_price
-        profit_percent = (profit / buy_price) * 100 if buy_price > 0 else 0
+    if ebay_data and resell_price and resell_price > actual_cost:
+        profit = resell_price - actual_cost
+        profit_percent = (profit / actual_cost) * 100 if actual_cost > 0 else 0
+        
+        # Color based on profit
+        if profit > 50:
+            color = discord.Color.gold()  # Excellent
+        elif profit > 20:
+            color = discord.Color.green()  # Good
+        else:
+            color = discord.Color.blue()  # Okay
     else:
         color = discord.Color.orange()  # No data or not profitable
         profit = 0
@@ -170,29 +241,37 @@ async def create_alert_embed(original_embed, source_message):
             value=profit_text,
             inline=False
         )
-    elif ebay_data:
+    elif ebay_data and sold_count > 0:
         alert.add_field(
-            name="⚠️ LOW PROFIT MARGIN",
-            value="Recent eBay sales suggest minimal profit potential",
+            name="⚠️ LOW/NO PROFIT",
+            value=f"Recent eBay sales show minimal profit potential\nMedian sold: £{ebay_data['median']:.2f} vs Cost: £{actual_cost:.2f}",
             inline=False
         )
     else:
         alert.add_field(
-            name="❓ NO EBAY DATA",
-            value="Could not find recent sold listings. Research required!",
+            name="❓ NO EBAY SALES DATA",
+            value="⚠️ **Could not find recent sold listings**\n\nThis could mean:\n• New/rare product\n• Product name needs refinement\n• Low demand item\n\n**Manual research required before buying!**",
             inline=False
         )
     
     # Price breakdown
     price_info = []
-    price_info.append(f"🏷️ **Buy Price:** £{buy_price:.2f}")
+    
+    if price_warning:
+        price_info.append(f"⚠️ **Alert Price:** ~~£{buy_price:.2f}~~ (may be overpriced)")
+        price_info.append(f"💡 **Lowest Current Listing:** £{current_rrp:.2f}")
+        price_info.append(f"📊 **Using for calculations:** £{actual_cost:.2f}")
+    else:
+        price_info.append(f"🏷️ **Alert Buy Price:** £{buy_price:.2f}")
+        if current_rrp and current_rrp < buy_price * 0.95:  # Only show if significantly lower
+            price_info.append(f"💡 **FYI: Found cheaper listing:** £{current_rrp:.2f}")
     
     if ebay_data:
         price_info.append(f"📊 **eBay Median Sold:** £{ebay_data['median']:.2f}")
-        price_info.append(f"📈 **eBay Average:** £{ebay_data['average']:.2f}")
-        price_info.append(f"💵 **Range:** £{ebay_data['min']:.2f} - £{ebay_data['max']:.2f}")
+        price_info.append(f"📈 **eBay Average Sold:** £{ebay_data['average']:.2f}")
+        price_info.append(f"💵 **Sold Price Range:** £{ebay_data['min']:.2f} - £{ebay_data['max']:.2f}")
     else:
-        price_info.append(f"❌ **Resell Data:** Not available")
+        price_info.append(f"❌ **Sold Data:** No recent sales found")
     
     alert.add_field(
         name="📊 Price Analysis",
@@ -225,14 +304,17 @@ async def create_alert_embed(original_embed, source_message):
             elif 'http' in field.value:
                 links.append(field.value)
     
-    # Add eBay search link
+    # Add eBay search links
     search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(product_name)}&LH_Sold=1&LH_Complete=1"
     links.append(f"[🔍 eBay Sold Listings]({search_url})")
+    
+    current_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(product_name)}&LH_ItemCondition=1000"
+    links.append(f"[🛒 Current eBay Listings]({current_url})")
     
     if links:
         alert.add_field(
             name="🔗 Links",
-            value="\n".join(links[:6]),
+            value="\n".join(links[:7]),
             inline=False
         )
     
@@ -244,13 +326,16 @@ async def create_alert_embed(original_embed, source_message):
     if original_embed.image:
         alert.set_image(url=original_embed.image.url)
     
-    # Footer with source
+    # Footer with source and warnings
     source_text = original_embed.author.name if original_embed.author else 'Unknown'
     if ebay_data:
-        source_text += f" | Data from {sold_count} eBay sales"
+        source_text += f" | {sold_count} sales analyzed"
+    if price_warning:
+        source_text += " | ⚠️ Price Alert"
+    
     alert.set_footer(text=source_text)
     
-    return alert, profit
+    return alert, profit, sold_count
 
 @bot.event
 async def on_ready():
@@ -276,20 +361,22 @@ async def on_message(message):
     for embed in message.embeds:
         try:
             # Create alert embed with eBay data
-            alert_embed, profit = await create_alert_embed(embed, message)
+            alert_embed, profit, sold_count = await create_alert_embed(embed, message)
             
             # Get role to ping
             role = message.guild.get_role(PING_ROLE_ID)
             
-            # Determine alert level
-            if profit > 50:
+            # Determine alert level based on profit AND data availability
+            if sold_count == 0:
+                alert_text = "⚠️ **NO SALES DATA - Research Required!**"
+            elif profit > 50:
                 alert_text = "🔥 **HIGH PROFIT DEAL!** 🔥"
             elif profit > 20:
                 alert_text = "🚨 **New Deal Alert!**"
             elif profit > 0:
                 alert_text = "💼 **Deal Detected**"
             else:
-                alert_text = "ℹ️ **Product Alert** (Research Required)"
+                alert_text = "ℹ️ **Product Alert** (Low/No Profit)"
             
             # Send notification
             if role:
