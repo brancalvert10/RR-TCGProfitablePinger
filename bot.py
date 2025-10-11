@@ -136,6 +136,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
     search_queries = search_queries[:10]
     
     print(f"Trying {len(search_queries)} search variations for: '{product_name}'", flush=True)
+    print(f"Queries to try: {search_queries}", flush=True)
     
     for i, query in enumerate(search_queries, 1):
         try:
@@ -171,7 +172,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                         ack = search_result.get('ack', [''])[0]
                         if ack == 'Failure':
                             error_msg = search_result.get('errorMessage', [{}])[0]
-                            print(f"  [{i}/{len(search_queries)}] API error for '{query}': {error_msg}")
+                            print(f"  [{i}/{len(search_queries)}] ❌ API error for '{query}': {error_msg}", flush=True)
                             continue
                         
                         items = search_result.get('searchResult', [{}])[0].get('item', [])
@@ -207,10 +208,12 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                                 'query_used': query
                             }, median_price, len(sold_prices)
                         else:
-                            print(f"  [{i}/{len(search_queries)}] Found items but no valid prices for: '{query}'")
+                            print(f"  [{i}/{len(search_queries)}] ⚠️ Found items but no valid prices for: '{query}'", flush=True)
         
         except Exception as e:
-            print(f"  [{i}/{len(search_queries)}] Error with query '{query}': {e}")
+            print(f"  [{i}/{len(search_queries)}] 💥 Error with query '{query}': {e}", flush=True)
+            import traceback
+            traceback.print_exc()
             continue
     
     # No results from any query
@@ -445,10 +448,12 @@ async def on_ready():
 async def on_message(message):
     # Debug: Log ALL messages in monitored channel
     if message.channel.id == MONITORED_CHANNEL_ID:
-        print(f"DEBUG: Message received in monitored channel from {message.author}")
-        print(f"DEBUG: Has embeds: {len(message.embeds)}")
-        print(f"DEBUG: Message author is bot: {message.author.bot}")
-        print(f"DEBUG: Message author is me: {message.author == bot.user}")
+        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
+        print(f"📨 Message received in monitored channel!", flush=True)
+        print(f"   Author: {message.author} (ID: {message.author.id})", flush=True)
+        print(f"   Has embeds: {len(message.embeds)}", flush=True)
+        print(f"   Is bot: {message.author.bot}", flush=True)
+        print(f"   Is me: {message.author == bot.user}", flush=True)
     
     # Only monitor the specific channel
     if message.channel.id != MONITORED_CHANNEL_ID:
@@ -456,15 +461,16 @@ async def on_message(message):
     
     # Ignore ONLY our own messages (not all bots)
     if message.author == bot.user:
-        print("DEBUG: Ignoring my own message")
+        print("⏭️  Ignoring my own message", flush=True)
         return
     
     # Check if message has embeds
     if not message.embeds:
-        print("DEBUG: No embeds found in message")
+        print("⏭️  No embeds found in message", flush=True)
         return
     
-    print(f"✓ Processing {len(message.embeds)} embed(s) from {message.author}!")
+    print(f"✅ Processing {len(message.embeds)} embed(s) from {message.author}!", flush=True)
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
     
     # Process each embed
     for embed in message.embeds:
