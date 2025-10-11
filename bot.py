@@ -6,6 +6,10 @@ import aiohttp
 import statistics
 from urllib.parse import quote
 import os
+import sys
+
+# Force stdout to flush immediately
+sys.stdout.reconfigure(line_buffering=True)
 
 # Bot setup
 intents = discord.Intents.default()
@@ -131,7 +135,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
     # Limit to 10 variations max to avoid excessive API calls
     search_queries = search_queries[:10]
     
-    print(f"Trying {len(search_queries)} search variations for: '{product_name}'")
+    print(f"Trying {len(search_queries)} search variations for: '{product_name}'", flush=True)
     
     for i, query in enumerate(search_queries, 1):
         try:
@@ -173,7 +177,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                         items = search_result.get('searchResult', [{}])[0].get('item', [])
                         
                         if not items:
-                            print(f"  [{i}/{len(search_queries)}] No results for: '{query}'")
+                            print(f"  [{i}/{len(search_queries)}] No results for: '{query}'", flush=True)
                             continue
                         
                         # Extract sold prices
@@ -186,7 +190,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
                                 sold_prices.append(price)
                         
                         if sold_prices:
-                            print(f"  [{i}/{len(search_queries)}] ✓ SUCCESS! Found {len(sold_prices)} sales using: '{query}'")
+                            print(f"  [{i}/{len(search_queries)}] ✓ SUCCESS! Found {len(sold_prices)} sales using: '{query}'", flush=True)
                             # Calculate statistics
                             avg_price = statistics.mean(sold_prices)
                             median_price = statistics.median(sold_prices)
@@ -210,7 +214,7 @@ async def get_ebay_sold_prices(product_name, max_results=20):
             continue
     
     # No results from any query
-    print(f"  ✗ FAILED: No sold items found after {len(search_queries)} attempts")
+    print(f"  ✗ FAILED: No sold items found after {len(search_queries)} attempts", flush=True)
     return None, None, 0
 
 def clean_product_name(name):
@@ -276,7 +280,7 @@ async def create_alert_embed(original_embed, source_message):
         buy_price = 0
     
     # Fetch eBay data
-    print(f"Searching eBay for: {product_name}")
+    print(f"Searching eBay for: {product_name}", flush=True)
     
     # Get sold prices (for resell estimate)
     ebay_data, resell_price, sold_count = await get_ebay_sold_prices(product_name)
@@ -429,11 +433,13 @@ async def create_alert_embed(original_embed, source_message):
 
 @bot.event
 async def on_ready():
-    print(f'{bot.user} is now monitoring for deals!')
-    print(f'Watching channel ID: {MONITORED_CHANNEL_ID}')
-    print(f'Ping role ID: {PING_ROLE_ID}')
-    print(f'eBay API integration: {"✓ Active" if EBAY_APP_ID else "✗ Not configured"}')
-    print('Bot is ready and waiting for embeds...')
+    print(f'{bot.user} is now monitoring for deals!', flush=True)
+    print(f'Watching channel ID: {MONITORED_CHANNEL_ID}', flush=True)
+    print(f'Ping role ID: {PING_ROLE_ID}', flush=True)
+    print(f'eBay API integration: {"✓ Active" if EBAY_APP_ID else "✗ Not configured"}', flush=True)
+    if EBAY_APP_ID:
+        print(f'eBay App ID: {EBAY_APP_ID[:10]}...', flush=True)
+    print('Bot is ready and waiting for embeds...', flush=True)
 
 @bot.event
 async def on_message(message):
