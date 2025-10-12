@@ -391,7 +391,7 @@ def extract_product_info(embed):
     
     return product_name, buy_price
 
-async def create_alert_embed(original_embed, source_message):
+async def create_alert_embed(original_embed, source_message, ebay_data=None, resell_price=None, sold_count=0):
     """Create a formatted alert embed with eBay resell data"""
     
     # Extract product info
@@ -402,14 +402,6 @@ async def create_alert_embed(original_embed, source_message):
     
     if not buy_price:
         buy_price = 0
-    
-    # Try eBay API first (fast)
-    ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
-    
-    # If API fails, use Selenium fallback
-    if not ebay_data or sold_count == 0:
-        print(f"   API returned no data, trying Selenium...", flush=True)
-        ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
     
     # Determine actual cost basis
     actual_cost = buy_price
@@ -543,6 +535,39 @@ async def create_alert_embed(original_embed, source_message):
     
     return alert, profit, sold_count
 
+def create_initial_embed(original_embed):
+    """Create a quick initial embed while searching"""
+    product_name, buy_price = extract_product_info(original_embed)
+    
+    if not product_name:
+        product_name = "Unknown Product"
+    
+    if not buy_price:
+        buy_price = 0
+    
+    alert = discord.Embed(
+        title=f"💰 {product_name}",
+        description="🔍 **Searching eBay for resell data...**\n\nThis may take a few seconds.",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    alert.add_field(
+        name="🏷️ Alert Buy Price",
+        value=f"£{buy_price:.2f}",
+        inline=False
+    )
+    
+    # Add thumbnail if original has one
+    if original_embed.thumbnail:
+        alert.set_thumbnail(url=original_embed.thumbnail.url)
+    
+    # Add image if original has one
+    if original_embed.image:
+        alert.set_image(url=original_embed.image.url)
+    
+    return alert
+
 @bot.event
 async def on_ready():
     print(f'{bot.user} is now monitoring for deals!', flush=True)
@@ -577,10 +602,38 @@ async def on_message(message):
     
     for embed in message.embeds:
         try:
-            alert_embed, profit, sold_count = await create_alert_embed(embed, message)
-            
+            # STEP 1: Send immediate ping with initial embed
             role = message.guild.get_role(PING_ROLE_ID)
+            initial_embed = create_initial_embed(embed)
             
+            if role:
+                alert_message = await message.channel.send(
+                    content=f"{role.mention} 🚨 **New Deal Alert!**",
+                    embed=initial_embed
+                )
+            else:
+                alert_message = await message.channel.send(
+                    content="🚨 **New Deal Alert!**",
+                    embed=initial_embed
+                )
+            
+            print("✅ Initial ping sent, now searching eBay...", flush=True)
+            
+            # STEP 2: Search eBay in the background
+            product_name, buy_price = extract_product_info(embed)
+            
+            # Try eBay API first (fast)
+            ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
+            
+            # If API fails, use Selenium fallback
+            if not ebay_data or sold_count == 0:
+                print(f"   API returned no data, trying Selenium...", flush=True)
+                ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
+            
+            # STEP 3: Edit the message with full analysis
+            final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
+            
+            # Update the content based on results
             if sold_count == 0:
                 alert_text = "⚠️ **NO SALES DATA - Research Required!**"
             elif profit > 50:
@@ -593,15 +646,17 @@ async def on_message(message):
                 alert_text = "ℹ️ **Product Alert** (Low/No Profit)"
             
             if role:
-                await message.channel.send(
+                await alert_message.edit(
                     content=f"{role.mention} {alert_text}",
-                    embed=alert_embed
+                    embed=final_embed
                 )
             else:
-                await message.channel.send(
+                await alert_message.edit(
                     content=alert_text,
-                    embed=alert_embed
+                    embed=final_embed
                 )
+            
+            print("✅ Message updated with full analysis!", flush=True)
         
         except Exception as e:
             print(f"Error processing embed: {e}", flush=True)
