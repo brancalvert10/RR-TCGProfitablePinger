@@ -669,7 +669,7 @@ async def on_message(message):
             print("✅ Initial ping sent, now searching eBay...", flush=True)
             
             # STEP 2: Search eBay in the background
-            product_name, buy_price = extract_product_info(embed)
+            product_name, buy_price, _ = extract_product_info(embed)
             
             # Try eBay API first (fast)
             ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
