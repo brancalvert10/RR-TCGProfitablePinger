@@ -168,55 +168,55 @@ def extract_product_info(embed):
     if embed.title:
         product_name = clean_product_name(embed.title)
     
-    # Extract buy price from fields - try multiple approaches
-    for field in embed.fields:
-        field_name_lower = field.name.lower()
-        field_value = field.value.strip()
-        
-        # Approach 1: Look for price in field name OR field value
-        if 'price' in field_name_lower or 'cost' in field_name_lower or 'price' in field_value.lower():
-            # Check field value for £
-            matches = re.findall(PRICE_PATTERN, field_value)
-            if matches and not buy_price:
-                buy_price = float(matches[0].replace(',', ''))
-                print(f"   Found price £{buy_price} in field '{field.name}': '{field_value}'", flush=True)
-                break
-        
-        # Approach 2: Any field with £ symbol
-        if '£' in field_value and not buy_price:
-            matches = re.findall(PRICE_PATTERN, field_value)
+    # Debug: Print entire embed structure
+    print(f"   === FULL EMBED DEBUG ===", flush=True)
+    print(f"   Title: '{embed.title}'", flush=True)
+    print(f"   Description: '{embed.description}'", flush=True)
+    print(f"   Author: '{embed.author.name if embed.author else None}'", flush=True)
+    print(f"   Footer: '{embed.footer.text if embed.footer else None}'", flush=True)
+    print(f"   Number of fields: {len(embed.fields)}", flush=True)
+    
+    # Collect all text from embed
+    all_text = []
+    
+    if embed.title:
+        all_text.append(('title', embed.title))
+    if embed.description:
+        all_text.append(('description', embed.description))
+    if embed.author and embed.author.name:
+        all_text.append(('author', embed.author.name))
+    if embed.footer and embed.footer.text:
+        all_text.append(('footer', embed.footer.text))
+    
+    # Check all fields
+    for idx, field in enumerate(embed.fields):
+        print(f"   Field {idx}: name='{field.name}' value='{field.value}' inline={field.inline}", flush=True)
+        all_text.append((f'field_{idx}_name', field.name))
+        all_text.append((f'field_{idx}_value', field.value))
+    
+    # Search for first price in all collected text
+    print(f"   Searching for price in {len(all_text)} text pieces...", flush=True)
+    
+    for location, text in all_text:
+        if text and '£' in str(text):
+            matches = re.findall(PRICE_PATTERN, str(text))
             if matches:
-                buy_price = float(matches[0].replace(',', ''))
-                print(f"   Found price £{buy_price} in field '{field.name}'", flush=True)
-                break
-    
-    # Check description for price if not found
-    if not buy_price and embed.description:
-        matches = re.findall(PRICE_PATTERN, embed.description)
-        if matches:
-            buy_price = float(matches[0].replace(',', ''))
-            print(f"   Found price £{buy_price} in description", flush=True)
-    
-    # Check embed author
-    if not buy_price and embed.author and embed.author.name:
-        matches = re.findall(PRICE_PATTERN, embed.author.name)
-        if matches:
-            buy_price = float(matches[0].replace(',', ''))
-            print(f"   Found price £{buy_price} in author", flush=True)
-    
-    # Check footer
-    if not buy_price and embed.footer and embed.footer.text:
-        matches = re.findall(PRICE_PATTERN, embed.footer.text)
-        if matches:
-            buy_price = float(matches[0].replace(',', ''))
-            print(f"   Found price £{buy_price} in footer", flush=True)
+                try:
+                    price = float(matches[0].replace(',', ''))
+                    # Reasonable price check
+                    if 1 < price < 100000:
+                        buy_price = price
+                        print(f"   ✅ Found price £{buy_price} in {location}", flush=True)
+                        break
+                except Exception as e:
+                    print(f"   Failed to parse price from {location}: {e}", flush=True)
+                    continue
     
     if not buy_price:
-        print(f"   ⚠️ Warning: Could not find buy price in embed!", flush=True)
-        # Debug: print all fields
-        print(f"   Debug - Fields found:", flush=True)
-        for field in embed.fields:
-            print(f"     - {field.name}: {field.value}", flush=True)
+        print(f"   ❌ NO PRICE FOUND!", flush=True)
+        print(f"   Checked locations: {[loc for loc, _ in all_text]}", flush=True)
+    
+    print(f"   === END DEBUG ===", flush=True)
     
     return product_name, buy_price
 
