@@ -685,40 +685,48 @@ async def on_message(message):
     
     for embed in message.embeds:
         try:
-            # STEP 1: Send immediate ping with initial embed
+            # STEP 1: IMMEDIATE PING - Extract minimal info and send ASAP
             role = message.guild.get_role(role_id)
-            initial_embed = create_initial_embed(embed, message)
             
-            # Get product name and link for initial message
-            product_name, _, product_link = extract_product_info(embed, message)
-            if not product_name:
-                product_name = "Unknown Product"
+            # Quick extraction - just get title for initial ping
+            product_name = embed.title if embed.title else "Unknown Product"
+            product_name_clean = clean_product_name(product_name)
             
-            # Format message with link if available
+            # Try to get URL quickly
+            product_link = None
+            try:
+                if embed.url:
+                    product_link = str(embed.url)
+            except:
+                pass
+            
+            # Send ping IMMEDIATELY (before creating full embed)
             if product_link:
                 if role:
                     alert_message = await message.channel.send(
-                        content=f"**[{product_name}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}",
-                        embed=initial_embed
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
                     )
                 else:
                     alert_message = await message.channel.send(
-                        content=f"**[{product_name}]({product_link})**\n**🚨 NEW DEAL ALERT**",
-                        embed=initial_embed
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**"
                     )
             else:
                 if role:
                     alert_message = await message.channel.send(
-                        content=f"**{product_name}**\n**🚨 NEW DEAL ALERT**\n{role.mention}",
-                        embed=initial_embed
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
                     )
                 else:
                     alert_message = await message.channel.send(
-                        content=f"**{product_name}**\n**🚨 NEW DEAL ALERT**",
-                        embed=initial_embed
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
                     )
             
-            print("✅ Initial ping sent, now searching eBay...", flush=True)
+            print("⚡ INSTANT ping sent!", flush=True)
+            
+            # STEP 2: Now create the initial embed and edit message
+            initial_embed = create_initial_embed(embed, message)
+            await alert_message.edit(embed=initial_embed)
+            
+            print("✅ Initial embed added, now searching eBay...", flush=True)
             
             # STEP 2: Search eBay in the background
             product_name, buy_price, _ = extract_product_info(embed, message)
@@ -735,10 +743,6 @@ async def on_message(message):
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results
-            product_name, _, product_link = extract_product_info(embed, message)
-            if not product_name:
-                product_name = "Unknown Product"
-            
             if sold_count == 0:
                 alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
             elif profit > 50:
@@ -750,27 +754,31 @@ async def on_message(message):
             else:
                 alert_status = "ℹ️ PRODUCT ALERT (Low/No Profit)"
             
+            # Get the product info again for final edit
+            product_name_final = embed.title if embed.title else "Unknown Product"
+            product_name_final_clean = clean_product_name(product_name_final)
+            
             # Format message with link if available
             if product_link:
                 if role:
                     await alert_message.edit(
-                        content=f"**[{product_name}]({product_link})**\n**{alert_status}**\n{role.mention}",
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**\n{role.mention}",
                         embed=final_embed
                     )
                 else:
                     await alert_message.edit(
-                        content=f"**[{product_name}]({product_link})**\n**{alert_status}**",
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**",
                         embed=final_embed
                     )
             else:
                 if role:
                     await alert_message.edit(
-                        content=f"**{product_name}**\n**{alert_status}**\n{role.mention}",
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
                         embed=final_embed
                     )
                 else:
                     await alert_message.edit(
-                        content=f"**{product_name}**\n**{alert_status}**",
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**",
                         embed=final_embed
                     )
             
