@@ -168,15 +168,24 @@ def extract_product_info(embed):
     if embed.title:
         product_name = clean_product_name(embed.title)
     
-    # Extract buy price from fields - try multiple field names
+    # Extract buy price from fields - try multiple approaches
     for field in embed.fields:
         field_name_lower = field.name.lower()
-        field_value = field.value
+        field_value = field.value.strip()
         
-        # Look for price in common field names
-        if 'price' in field_name_lower or 'cost' in field_name_lower or '£' in field_value:
+        # Approach 1: Look for price in field name OR field value
+        if 'price' in field_name_lower or 'cost' in field_name_lower or 'price' in field_value.lower():
+            # Check field value for £
             matches = re.findall(PRICE_PATTERN, field_value)
             if matches and not buy_price:
+                buy_price = float(matches[0].replace(',', ''))
+                print(f"   Found price £{buy_price} in field '{field.name}': '{field_value}'", flush=True)
+                break
+        
+        # Approach 2: Any field with £ symbol
+        if '£' in field_value and not buy_price:
+            matches = re.findall(PRICE_PATTERN, field_value)
+            if matches:
                 buy_price = float(matches[0].replace(',', ''))
                 print(f"   Found price £{buy_price} in field '{field.name}'", flush=True)
                 break
@@ -188,16 +197,26 @@ def extract_product_info(embed):
             buy_price = float(matches[0].replace(',', ''))
             print(f"   Found price £{buy_price} in description", flush=True)
     
-    # Last resort: check embed author or footer
-    if not buy_price:
-        if embed.author and embed.author.name:
-            matches = re.findall(PRICE_PATTERN, embed.author.name)
-            if matches:
-                buy_price = float(matches[0].replace(',', ''))
-                print(f"   Found price £{buy_price} in author", flush=True)
+    # Check embed author
+    if not buy_price and embed.author and embed.author.name:
+        matches = re.findall(PRICE_PATTERN, embed.author.name)
+        if matches:
+            buy_price = float(matches[0].replace(',', ''))
+            print(f"   Found price £{buy_price} in author", flush=True)
+    
+    # Check footer
+    if not buy_price and embed.footer and embed.footer.text:
+        matches = re.findall(PRICE_PATTERN, embed.footer.text)
+        if matches:
+            buy_price = float(matches[0].replace(',', ''))
+            print(f"   Found price £{buy_price} in footer", flush=True)
     
     if not buy_price:
         print(f"   ⚠️ Warning: Could not find buy price in embed!", flush=True)
+        # Debug: print all fields
+        print(f"   Debug - Fields found:", flush=True)
+        for field in embed.fields:
+            print(f"     - {field.name}: {field.value}", flush=True)
     
     return product_name, buy_price
 
