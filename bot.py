@@ -303,7 +303,7 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
                     for match in matches:
                         try:
                             price = float(match.replace(',', ''))
-                            if 5 < price < 10000:  # Lowered from 10 to 5
+                            if 5 < price < 10000:
                                 sold_prices.append(price)
                                 break
                         except ValueError:
@@ -340,36 +340,30 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
         if driver:
             driver.quit()
 
-def extract_product_info(embed):
+def extract_product_info(embed, message=None):
     """Extract product name, price, and link from embed"""
     product_name = None
     buy_price = None
     product_link = None
     
+    # Debug: Print entire embed structure FIRST
+    print(f"   === FULL EMBED DEBUG ===", flush=True)
+    print(f"   Title: '{embed.title}'", flush=True)
+    
     # Get product name from title
     if embed.title:
         product_name = clean_product_name(embed.title)
     
-    # Debug: Print entire embed structure
-    print(f"   === FULL EMBED DEBUG ===", flush=True)
-    print(f"   Title: '{embed.title}'", flush=True)
-    print(f"   Description: '{embed.description}'", flush=True)
-    print(f"   Author: '{embed.author.name if embed.author else None}'", flush=True)
-    print(f"   Footer: '{embed.footer.text if embed.footer else None}'", flush=True)
-    print(f"   Number of fields: {len(embed.fields)}", flush=True)
-    
     # Try to get URL from raw message data (bypassing discord.py's embed object)
     if message:
         try:
-            # Access the raw API data
             for raw_embed in message.embeds:
                 if raw_embed.title == embed.title:
-                    # Try to access through __dict__ or _fields
-                    if hasattr(raw_embed, '_url'):
-                        product_link = raw_embed._url
+                    if hasattr(raw_embed, '_url') and raw_embed._url:
+                        product_link = str(raw_embed._url)
                         print(f"   ✅ Found URL via _url: {product_link[:60]}...", flush=True)
-                    elif '_url' in raw_embed.__dict__:
-                        product_link = raw_embed.__dict__['_url']
+                    elif '_url' in raw_embed.__dict__ and raw_embed.__dict__['_url']:
+                        product_link = str(raw_embed.__dict__['_url'])
                         print(f"   ✅ Found URL via __dict__: {product_link[:60]}...", flush=True)
         except Exception as e:
             print(f"   ⚠️ Raw message approach failed: {e}", flush=True)
@@ -391,23 +385,34 @@ def extract_product_info(embed):
     if embed.footer and embed.footer.text:
         all_text.append(('footer', embed.footer.text))
     
-    # Check all fields
+    # Check all fields for any URLs
     for idx, field in enumerate(embed.fields):
         print(f"   Field {idx}: name='{field.name}' value='{field.value}' inline={field.inline}", flush=True)
         all_text.append((f'field_{idx}_name', field.name))
         all_text.append((f'field_{idx}_value', field.value))
         
-        # Extract product link from Links field
-        if 'link' in field.name.lower() and not product_link:
+        # Extract ANY URLs from field values (including markdown links)
+        if not product_link:
             # Blacklist of domains to exclude
-            excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com']
-            urls = re.findall(r'https?://[^\s\]]+', field.value)
-            for url in urls:
+            excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com', 'ebay.com', 'ebay.co.uk', 'snkrdunk.com']
+            
+            # Try to find markdown-style links first: [text](url)
+            markdown_links = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)', field.value)
+            for text, url in markdown_links:
                 # Check if URL contains any excluded domain
                 if not any(excluded in url.lower() for excluded in excluded_domains):
                     product_link = url
-                    print(f"   ✅ Found product link: {product_link}", flush=True)
+                    print(f"   ✅ Found product link in field '{field.name}': {product_link[:60]}...", flush=True)
                     break
+            
+            # If no markdown links found, try plain URLs
+            if not product_link:
+                urls = re.findall(r'https?://[^\s\)\]]+', field.value)
+                for url in urls:
+                    if not any(excluded in url.lower() for excluded in excluded_domains):
+                        product_link = url
+                        print(f"   ✅ Found product link in field '{field.name}': {product_link[:60]}...", flush=True)
+                        break
     
     # Search for first price in all collected text
     print(f"   Searching for price in {len(all_text)} text pieces...", flush=True)
