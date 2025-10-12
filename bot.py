@@ -341,9 +341,10 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
             driver.quit()
 
 def extract_product_info(embed):
-    """Extract product name and price from embed"""
+    """Extract product name, price, and link from embed"""
     product_name = None
     buy_price = None
+    product_link = None
     
     # Get product name from title
     if embed.title:
@@ -374,6 +375,18 @@ def extract_product_info(embed):
         print(f"   Field {idx}: name='{field.name}' value='{field.value}' inline={field.inline}", flush=True)
         all_text.append((f'field_{idx}_name', field.name))
         all_text.append((f'field_{idx}_value', field.value))
+        
+        # Extract product link from Links field
+        if 'link' in field.name.lower() and not product_link:
+            # Blacklist of domains to exclude
+            excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com']
+            urls = re.findall(r'https?://[^\s\]]+', field.value)
+            for url in urls:
+                # Check if URL contains any excluded domain
+                if not any(excluded in url.lower() for excluded in excluded_domains):
+                    product_link = url
+                    print(f"   ✅ Found product link: {product_link}", flush=True)
+                    break
     
     # Search for first price in all collected text
     print(f"   Searching for price in {len(all_text)} text pieces...", flush=True)
@@ -397,15 +410,18 @@ def extract_product_info(embed):
         print(f"   ❌ NO PRICE FOUND!", flush=True)
         print(f"   Checked locations: {[loc for loc, _ in all_text]}", flush=True)
     
+    if not product_link:
+        print(f"   ⚠️ No product link found", flush=True)
+    
     print(f"   === END DEBUG ===", flush=True)
     
-    return product_name, buy_price
+    return product_name, buy_price, product_link
 
 async def create_alert_embed(original_embed, source_message, ebay_data=None, resell_price=None, sold_count=0):
     """Create a formatted alert embed with eBay resell data"""
     
     # Extract product info
-    product_name, buy_price = extract_product_info(original_embed)
+    product_name, buy_price, product_link = extract_product_info(original_embed)
     
     if not product_name:
         product_name = "Unknown Product"
@@ -547,7 +563,7 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
 
 def create_initial_embed(original_embed):
     """Create a quick initial embed while searching"""
-    product_name, buy_price = extract_product_info(original_embed)
+    product_name, buy_price, product_link = extract_product_info(original_embed)
     
     if not product_name:
         product_name = "Unknown Product"
@@ -621,19 +637,25 @@ async def on_message(message):
             role = message.guild.get_role(role_id)
             initial_embed = create_initial_embed(embed)
             
-            # Get product name for initial message
-            product_name, _ = extract_product_info(embed)
+            # Get product name and link for initial message
+            product_name, _, product_link = extract_product_info(embed)
             if not product_name:
                 product_name = "Unknown Product"
             
+            # Format product name with link if available
+            if product_link:
+                product_title = f"**[{product_name}]({product_link})**"
+            else:
+                product_title = f"**{product_name}**"
+            
             if role:
                 alert_message = await message.channel.send(
-                    content=f"**{product_name}** 🚨 NEW DEAL ALERT\n{role.mention}",
+                    content=f"{product_title}\n**🚨 NEW DEAL ALERT**\n{role.mention}",
                     embed=initial_embed
                 )
             else:
                 alert_message = await message.channel.send(
-                    content=f"**{product_name}** 🚨 NEW DEAL ALERT",
+                    content=f"{product_title}\n**🚨 NEW DEAL ALERT**",
                     embed=initial_embed
                 )
             
@@ -654,29 +676,35 @@ async def on_message(message):
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results
-            product_name, _ = extract_product_info(embed)
+            product_name, _, product_link = extract_product_info(embed)
             if not product_name:
                 product_name = "Unknown Product"
             
-            if sold_count == 0:
-                alert_title = f"**{product_name}** ⚠️ NO SALES DATA - RESEARCH REQUIRED"
-            elif profit > 50:
-                alert_title = f"**{product_name}** 🔥 HIGH PROFIT DEAL"
-            elif profit > 20:
-                alert_title = f"**{product_name}** 🚨 NEW DEAL ALERT"
-            elif profit > 0:
-                alert_title = f"**{product_name}** 💼 DEAL DETECTED"
+            # Format product name with link if available
+            if product_link:
+                product_title = f"**[{product_name}]({product_link})**"
             else:
-                alert_title = f"**{product_name}** ℹ️ PRODUCT ALERT (Low/No Profit)"
+                product_title = f"**{product_name}**"
+            
+            if sold_count == 0:
+                alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
+            elif profit > 50:
+                alert_status = "🔥 HIGH PROFIT DEAL"
+            elif profit > 20:
+                alert_status = "🚨 NEW DEAL ALERT"
+            elif profit > 0:
+                alert_status = "💼 DEAL DETECTED"
+            else:
+                alert_status = "ℹ️ PRODUCT ALERT (Low/No Profit)"
             
             if role:
                 await alert_message.edit(
-                    content=f"{alert_title}\n{role.mention}",
+                    content=f"{product_title}\n**{alert_status}**\n{role.mention}",
                     embed=final_embed
                 )
             else:
                 await alert_message.edit(
-                    content=alert_title,
+                    content=f"{product_title}\n**{alert_status}**",
                     embed=final_embed
                 )
             
