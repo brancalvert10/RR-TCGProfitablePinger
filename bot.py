@@ -642,22 +642,29 @@ async def on_message(message):
             if not product_name:
                 product_name = "Unknown Product"
             
-            # Format product name with link if available
+            # Format message with link if available
             if product_link:
-                product_title = f"**[{product_name}]({product_link})**"
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name}**\n{product_link}\n**🚨 NEW DEAL ALERT**\n{role.mention}",
+                        embed=initial_embed
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name}**\n{product_link}\n**🚨 NEW DEAL ALERT**",
+                        embed=initial_embed
+                    )
             else:
-                product_title = f"**{product_name}**"
-            
-            if role:
-                alert_message = await message.channel.send(
-                    content=f"{product_title}\n**🚨 NEW DEAL ALERT**\n{role.mention}",
-                    embed=initial_embed
-                )
-            else:
-                alert_message = await message.channel.send(
-                    content=f"{product_title}\n**🚨 NEW DEAL ALERT**",
-                    embed=initial_embed
-                )
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name}**\n**🚨 NEW DEAL ALERT**\n{role.mention}",
+                        embed=initial_embed
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name}**\n**🚨 NEW DEAL ALERT**",
+                        embed=initial_embed
+                    )
             
             print("✅ Initial ping sent, now searching eBay...", flush=True)
             
@@ -680,12 +687,6 @@ async def on_message(message):
             if not product_name:
                 product_name = "Unknown Product"
             
-            # Format product name with link if available
-            if product_link:
-                product_title = f"**[{product_name}]({product_link})**"
-            else:
-                product_title = f"**{product_name}**"
-            
             if sold_count == 0:
                 alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
             elif profit > 50:
@@ -697,16 +698,29 @@ async def on_message(message):
             else:
                 alert_status = "ℹ️ PRODUCT ALERT (Low/No Profit)"
             
-            if role:
-                await alert_message.edit(
-                    content=f"{product_title}\n**{alert_status}**\n{role.mention}",
-                    embed=final_embed
-                )
+            # Format message with link if available
+            if product_link:
+                if role:
+                    await alert_message.edit(
+                        content=f"**{product_name}**\n{product_link}\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**{product_name}**\n{product_link}\n**{alert_status}**",
+                        embed=final_embed
+                    )
             else:
-                await alert_message.edit(
-                    content=f"{product_title}\n**{alert_status}**",
-                    embed=final_embed
-                )
+                if role:
+                    await alert_message.edit(
+                        content=f"**{product_name}**\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**{product_name}**\n**{alert_status}**",
+                        embed=final_embed
+                    )
             
             print("✅ Message updated with full analysis!", flush=True)
         
