@@ -1,30 +1,4 @@
-def should_exclude_multipacks(product_name):
-    """Determine if we should exclude multipacks based on product type"""
-    lower_name = product_name.lower()
-    
-    # Single item indicators - these should exclude multipacks
-    single_item_keywords = [
-        'tin', 'mini tin', 'booster pack', 'single pack', 'blister',
-        'theme deck', 'starter deck', 'premium collection'
-    ]
-    
-    # If product name suggests a single item, exclude multipacks
-    if any(keyword in lower_name for keyword in single_item_keywords):
-        return True
-    
-    # If it's already a multipack/box, don't exclude anything
-    multipack_keywords = ['booster box', 'display', 'case', 'bundle', 'lot', 'set of']
-    if any(keyword in lower_name for keyword in multipack_keywords):
-        return False
-    
-    # Default: don't exclude (safer for unknown products)
-    return False
-
-def get_exclusion_terms(product_name):
-    """Get eBay search exclusion terms if applicable"""
-    if should_exclude_multipacks(product_name):
-        return ' -"booster box" -display -case -lot -"set of"'
-    return ''import discord
+import discord
 from discord.ext import commands
 import re
 from datetime import datetime
@@ -60,6 +34,34 @@ EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 
 # Price extraction patterns - allow optional space after £
 PRICE_PATTERN = r'£\s*(\d+\.?\d*)'
+
+def should_exclude_multipacks(product_name):
+    """Determine if we should exclude multipacks based on product type"""
+    lower_name = product_name.lower()
+    
+    # Single item indicators - these should exclude multipacks
+    single_item_keywords = [
+        'tin', 'mini tin', 'booster pack', 'single pack', 'blister',
+        'theme deck', 'starter deck', 'premium collection'
+    ]
+    
+    # If product name suggests a single item, exclude multipacks
+    if any(keyword in lower_name for keyword in single_item_keywords):
+        return True
+    
+    # If it's already a multipack/box, don't exclude anything
+    multipack_keywords = ['booster box', 'display', 'case', 'bundle', 'lot', 'set of']
+    if any(keyword in lower_name for keyword in multipack_keywords):
+        return False
+    
+    # Default: don't exclude (safer for unknown products)
+    return False
+
+def get_exclusion_terms(product_name):
+    """Get eBay search exclusion terms if applicable"""
+    if should_exclude_multipacks(product_name):
+        return ' -"booster box" -display -case -lot -"set of"'
+    return ''
 
 def clean_product_name(name):
     """Clean and optimize product name for eBay search"""
@@ -122,7 +124,13 @@ async def get_ebay_sold_prices_api(product_name, max_results=10):
             if not search_query:
                 continue
             
-            print(f"   [{i}/{len(search_queries)}] API search: '{query}'", flush=True)
+            print(f"   [{i}/{len(search_queries)}] API search: '{search_query}'", flush=True)
+            
+            # Add exclusions only if it's a single-item product
+            exclusions = get_exclusion_terms(product_name)
+            search_with_exclusions = search_query + exclusions
+            if exclusions:
+                print(f"      (Excluding multipacks)", flush=True)
             
             params = {
                 'OPERATION-NAME': 'findCompletedItems',
@@ -130,7 +138,7 @@ async def get_ebay_sold_prices_api(product_name, max_results=10):
                 'SECURITY-APPNAME': EBAY_APP_ID,
                 'RESPONSE-DATA-FORMAT': 'JSON',
                 'REST-PAYLOAD': '',
-                'keywords': search_query,
+                'keywords': search_with_exclusions,
                 'itemFilter(0).name': 'SoldItemsOnly',
                 'itemFilter(0).value': 'true',
                 'itemFilter(1).name': 'ListingType',
