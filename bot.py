@@ -421,7 +421,7 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     """Create a formatted alert embed with eBay resell data"""
     
     # Extract product info
-    product_name, buy_price, product_link = extract_product_info(original_embed)
+    product_name, buy_price, product_link = extract_product_info(original_embed, source_message)
     
     if not product_name:
         product_name = "Unknown Product"
@@ -561,9 +561,9 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     
     return alert, profit, sold_count
 
-def create_initial_embed(original_embed):
+def create_initial_embed(original_embed, message=None):
     """Create a quick initial embed while searching"""
-    product_name, buy_price, product_link = extract_product_info(original_embed)
+    product_name, buy_price, product_link = extract_product_info(original_embed, message)
     
     if not product_name:
         product_name = "Unknown Product"
@@ -635,10 +635,10 @@ async def on_message(message):
         try:
             # STEP 1: Send immediate ping with initial embed
             role = message.guild.get_role(role_id)
-            initial_embed = create_initial_embed(embed)
+            initial_embed = create_initial_embed(embed, message)
             
             # Get product name and link for initial message
-            product_name, _, product_link = extract_product_info(embed)
+            product_name, _, product_link = extract_product_info(embed, message)
             if not product_name:
                 product_name = "Unknown Product"
             
@@ -669,7 +669,7 @@ async def on_message(message):
             print("✅ Initial ping sent, now searching eBay...", flush=True)
             
             # STEP 2: Search eBay in the background
-            product_name, buy_price, _ = extract_product_info(embed)
+            product_name, buy_price, _ = extract_product_info(embed, message)
             
             # Try eBay API first (fast)
             ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
@@ -683,7 +683,7 @@ async def on_message(message):
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results
-            product_name, _, product_link = extract_product_info(embed)
+            product_name, _, product_link = extract_product_info(embed, message)
             if not product_name:
                 product_name = "Unknown Product"
             
