@@ -754,16 +754,30 @@ async def on_message(message):
             product_name_final_clean = clean_product_name(product_name_final)
             
             # Edit main message with profit status
-            if role:
-                await alert_message.edit(
-                    content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
-                    embed=final_embed
-                )
+            if product_link:
+                # If we have a link, make the title clickable
+                if role:
+                    await alert_message.edit(
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**",
+                        embed=final_embed
+                    )
             else:
-                await alert_message.edit(
-                    content=f"**{product_name_final_clean}**\n**{alert_status}**",
-                    embed=final_embed
-                )
+                # No link, just plain text
+                if role:
+                    await alert_message.edit(
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**",
+                        embed=final_embed
+                    )
             
             print("✅ Message updated with full analysis!", flush=True)
         
