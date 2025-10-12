@@ -700,15 +700,25 @@ async def on_message(message):
             except:
                 pass
             
-            # Send ping IMMEDIATELY - just title and role, no status yet
-            if role:
-                alert_message = await message.channel.send(
-                    content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
-                )
+            # Send ping IMMEDIATELY - make title clickable if we have a link
+            if product_link:
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**"
+                    )
             else:
-                alert_message = await message.channel.send(
-                    content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
-                )
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
+                    )
             
             # Send product link as separate message if available
             link_message = None
