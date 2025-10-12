@@ -73,19 +73,22 @@ async def get_ebay_sold_prices_api(product_name, max_results=10):
     
     print(f"🔍 Searching eBay API for: '{product_name}'", flush=True)
     
-    # Build 2 search variations - use quotes for exact match
+    # Build search variations - try exact match first, then broader
     search_queries = []
     cleaned = clean_product_name(product_name)
     
-    # Primary: Exact match with quotes
+    # 1. Exact match with quotes (most precise)
     search_queries.append(f'"{cleaned}"')
     
-    # Fallback: Without last word (still quoted for precision)
+    # 2. Without quotes (broader, catches variations)
+    search_queries.append(cleaned)
+    
+    # 3. Without last word and no quotes (fallback)
     words = cleaned.split()
     if len(words) >= 3:
-        search_queries.append(f'"{" ".join(words[:-1])}"')
+        search_queries.append(' '.join(words[:-1]))
     
-    print(f"   Will try {len(search_queries)} exact match searches", flush=True)
+    print(f"   Will try {len(search_queries)} searches (exact → broad)", flush=True)
     
     for i, query in enumerate(search_queries, 1):
         try:
@@ -189,19 +192,23 @@ def get_driver():
     return driver
 
 async def scrape_ebay_sold_prices_selenium(product_name, max_results=10):
-    """Fallback: Scrape eBay using Selenium with exact match"""
+    """Fallback: Scrape eBay using Selenium"""
     print(f"🔍 Selenium fallback for: '{product_name}'", flush=True)
     
     cleaned = clean_product_name(product_name)
     
-    # Use exact match by putting in quotes
-    search_query = f'"{cleaned}"'
-    
-    print(f"   Exact match search: {search_query}", flush=True)
+    # Try exact match first, then without quotes
+    search_queries = [f'"{cleaned}"', cleaned]
     
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _scrape_ebay_sync, search_query, max_results)
-    return result
+    
+    for query in search_queries:
+        print(f"   Trying: {query}", flush=True)
+        result = await loop.run_in_executor(None, _scrape_ebay_sync, query, max_results)
+        if result[0]:  # If we got data
+            return result
+    
+    return None, None, 0
 
 def _scrape_ebay_sync(search_query, max_results):
     """Synchronous Selenium scraping"""
