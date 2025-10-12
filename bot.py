@@ -698,12 +698,12 @@ async def on_message(message):
             if product_link:
                 if role:
                     alert_message = await message.channel.send(
-                        content=f"**{product_name}**\n{product_link}\n**🚨 NEW DEAL ALERT**\n{role.mention}",
+                        content=f"**[{product_name}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}",
                         embed=initial_embed
                     )
                 else:
                     alert_message = await message.channel.send(
-                        content=f"**{product_name}**\n{product_link}\n**🚨 NEW DEAL ALERT**",
+                        content=f"**[{product_name}]({product_link})**\n**🚨 NEW DEAL ALERT**",
                         embed=initial_embed
                     )
             else:
@@ -754,12 +754,12 @@ async def on_message(message):
             if product_link:
                 if role:
                     await alert_message.edit(
-                        content=f"**{product_name}**\n{product_link}\n**{alert_status}**\n{role.mention}",
+                        content=f"**[{product_name}]({product_link})**\n**{alert_status}**\n{role.mention}",
                         embed=final_embed
                     )
                 else:
                     await alert_message.edit(
-                        content=f"**{product_name}**\n{product_link}\n**{alert_status}**",
+                        content=f"**[{product_name}]({product_link})**\n**{alert_status}**",
                         embed=final_embed
                     )
             else:
