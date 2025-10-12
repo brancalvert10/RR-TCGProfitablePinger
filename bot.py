@@ -621,14 +621,19 @@ async def on_message(message):
             role = message.guild.get_role(role_id)
             initial_embed = create_initial_embed(embed)
             
+            # Get product name for initial message
+            product_name, _ = extract_product_info(embed)
+            if not product_name:
+                product_name = "Unknown Product"
+            
             if role:
                 alert_message = await message.channel.send(
-                    content=f"{role.mention} 🚨 **New Deal Alert!**",
+                    content=f"**{product_name}** 🚨 NEW DEAL ALERT\n{role.mention}",
                     embed=initial_embed
                 )
             else:
                 alert_message = await message.channel.send(
-                    content="🚨 **New Deal Alert!**",
+                    content=f"**{product_name}** 🚨 NEW DEAL ALERT",
                     embed=initial_embed
                 )
             
@@ -649,25 +654,29 @@ async def on_message(message):
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results
+            product_name, _ = extract_product_info(embed)
+            if not product_name:
+                product_name = "Unknown Product"
+            
             if sold_count == 0:
-                alert_text = "⚠️ **NO SALES DATA - Research Required!**"
+                alert_title = f"**{product_name}** ⚠️ NO SALES DATA - RESEARCH REQUIRED"
             elif profit > 50:
-                alert_text = "🔥 **HIGH PROFIT DEAL!** 🔥"
+                alert_title = f"**{product_name}** 🔥 HIGH PROFIT DEAL"
             elif profit > 20:
-                alert_text = "🚨 **New Deal Alert!**"
+                alert_title = f"**{product_name}** 🚨 NEW DEAL ALERT"
             elif profit > 0:
-                alert_text = "💼 **Deal Detected**"
+                alert_title = f"**{product_name}** 💼 DEAL DETECTED"
             else:
-                alert_text = "ℹ️ **Product Alert** (Low/No Profit)"
+                alert_title = f"**{product_name}** ℹ️ PRODUCT ALERT (Low/No Profit)"
             
             if role:
                 await alert_message.edit(
-                    content=f"{role.mention} {alert_text}",
+                    content=f"{alert_title}\n{role.mention}",
                     embed=final_embed
                 )
             else:
                 await alert_message.edit(
-                    content=alert_text,
+                    content=alert_title,
                     embed=final_embed
                 )
             
