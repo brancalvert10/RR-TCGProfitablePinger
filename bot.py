@@ -700,25 +700,20 @@ async def on_message(message):
             except:
                 pass
             
-            # Send ping IMMEDIATELY (before creating full embed)
-            if product_link:
-                if role:
-                    alert_message = await message.channel.send(
-                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
-                    )
-                else:
-                    alert_message = await message.channel.send(
-                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**"
-                    )
+            # Send ping IMMEDIATELY - just title and role, no status yet
+            if role:
+                alert_message = await message.channel.send(
+                    content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
+                )
             else:
-                if role:
-                    alert_message = await message.channel.send(
-                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
-                    )
-                else:
-                    alert_message = await message.channel.send(
-                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
-                    )
+                alert_message = await message.channel.send(
+                    content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
+                )
+            
+            # Send product link as separate message if available
+            link_message = None
+            if product_link:
+                link_message = await message.channel.send(content=product_link)
             
             print("⚡ INSTANT ping sent!", flush=True)
             
@@ -748,39 +743,27 @@ async def on_message(message):
             elif profit > 50:
                 alert_status = "🔥 HIGH PROFIT DEAL"
             elif profit > 20:
-                alert_status = "🚨 NEW DEAL ALERT"
+                alert_status = "🚨 PROFITABLE DEAL"
             elif profit > 0:
                 alert_status = "💼 DEAL DETECTED"
             else:
-                alert_status = "ℹ️ PRODUCT ALERT (Low/No Profit)"
+                alert_status = "ℹ️ LOW/NO PROFIT"
             
-            # Get the product info again for final edit
+            # Get the product info for final edit
             product_name_final = embed.title if embed.title else "Unknown Product"
             product_name_final_clean = clean_product_name(product_name_final)
             
-            # Format message with link if available
-            if product_link:
-                if role:
-                    await alert_message.edit(
-                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**\n{role.mention}",
-                        embed=final_embed
-                    )
-                else:
-                    await alert_message.edit(
-                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**",
-                        embed=final_embed
-                    )
+            # Edit main message with profit status
+            if role:
+                await alert_message.edit(
+                    content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
+                    embed=final_embed
+                )
             else:
-                if role:
-                    await alert_message.edit(
-                        content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
-                        embed=final_embed
-                    )
-                else:
-                    await alert_message.edit(
-                        content=f"**{product_name_final_clean}**\n**{alert_status}**",
-                        embed=final_embed
-                    )
+                await alert_message.edit(
+                    content=f"**{product_name_final_clean}**\n**{alert_status}**",
+                    embed=final_embed
+                )
             
             print("✅ Message updated with full analysis!", flush=True)
         
