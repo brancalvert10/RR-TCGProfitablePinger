@@ -13,6 +13,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
+print(f"Using discord library version: {discord.__version__}", flush=True)
+
 # Force stdout to flush immediately
 sys.stdout.reconfigure(line_buffering=True)
 
@@ -359,12 +361,36 @@ def extract_product_info(embed, message=None):
         try:
             for raw_embed in message.embeds:
                 if raw_embed.title == embed.title:
-                    if hasattr(raw_embed, '_url') and raw_embed._url:
-                        product_link = str(raw_embed._url)
-                        print(f"   ✅ Found URL via _url: {product_link[:60]}...", flush=True)
-                    elif '_url' in raw_embed.__dict__ and raw_embed.__dict__['_url']:
-                        product_link = str(raw_embed.__dict__['_url'])
-                        print(f"   ✅ Found URL via __dict__: {product_link[:60]}...", flush=True)
+                    # Try multiple methods to access the URL
+                    print(f"   Debug: Trying to access URL from embed...", flush=True)
+                    
+                    # Method 1: Direct property access
+                    try:
+                        if raw_embed.url:
+                            product_link = str(raw_embed.url)
+                            print(f"   ✅ Found URL via .url property: {product_link[:60]}...", flush=True)
+                    except Exception as e1:
+                        print(f"   Method 1 failed: {e1}", flush=True)
+                    
+                    # Method 2: to_dict()
+                    if not product_link:
+                        try:
+                            embed_dict = raw_embed.to_dict()
+                            if 'url' in embed_dict and embed_dict['url']:
+                                product_link = str(embed_dict['url'])
+                                print(f"   ✅ Found URL via to_dict(): {product_link[:60]}...", flush=True)
+                        except Exception as e2:
+                            print(f"   Method 2 failed: {e2}", flush=True)
+                    
+                    # Method 3: _url private attribute
+                    if not product_link:
+                        try:
+                            if hasattr(raw_embed, '_url') and raw_embed._url:
+                                product_link = str(raw_embed._url)
+                                print(f"   ✅ Found URL via _url: {product_link[:60]}...", flush=True)
+                        except Exception as e3:
+                            print(f"   Method 3 failed: {e3}", flush=True)
+                            
         except Exception as e:
             print(f"   ⚠️ Raw message approach failed: {e}", flush=True)
     
