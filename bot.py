@@ -23,9 +23,19 @@ intents.messages = True
 
 bot = commands.Bot(command_prefix='!', intents=intents)
 
-# Configuration - Using environment variables
-MONITORED_CHANNEL_ID = int(os.getenv('MONITORED_CHANNEL_ID', '1417115045573300244'))
-PING_ROLE_ID = int(os.getenv('PING_ROLE_ID', '1400527195679490319'))
+# Configuration - Parse multiple channels from environment variable
+# Format: MONITORED_CHANNELS=channel_id:role_id,channel_id:role_id
+MONITORED_CHANNELS = {}
+channels_config = os.getenv('MONITORED_CHANNELS', '1417115045573300244:1400527195679490319,1397272799835324590:1397286672160395485')
+
+for pair in channels_config.split(','):
+    if ':' in pair:
+        try:
+            channel_id, role_id = pair.split(':')
+            MONITORED_CHANNELS[int(channel_id.strip())] = int(role_id.strip())
+        except ValueError:
+            print(f"⚠️ Warning: Could not parse channel config: {pair}", flush=True)
+
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 EBAY_APP_ID = os.getenv('EBAY_APP_ID')
 
@@ -571,8 +581,9 @@ def create_initial_embed(original_embed):
 @bot.event
 async def on_ready():
     print(f'{bot.user} is now monitoring for deals!', flush=True)
-    print(f'Watching channel ID: {MONITORED_CHANNEL_ID}', flush=True)
-    print(f'Ping role ID: {PING_ROLE_ID}', flush=True)
+    print(f'Monitoring {len(MONITORED_CHANNELS)} channel(s):', flush=True)
+    for channel_id, role_id in MONITORED_CHANNELS.items():
+        print(f'  • Channel {channel_id} → Role {role_id}', flush=True)
     print(f'eBay API: {"✓ Configured" if EBAY_APP_ID else "✗ Not configured"}', flush=True)
     if EBAY_APP_ID:
         print(f'eBay App ID: {EBAY_APP_ID[:15]}...', flush=True)
@@ -580,13 +591,8 @@ async def on_ready():
 
 @bot.event
 async def on_message(message):
-    if message.channel.id == MONITORED_CHANNEL_ID:
-        print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
-        print(f"📨 Message received in monitored channel!", flush=True)
-        print(f"   Author: {message.author}", flush=True)
-        print(f"   Has embeds: {len(message.embeds)}", flush=True)
-    
-    if message.channel.id != MONITORED_CHANNEL_ID:
+    # Check if message is in a monitored channel
+    if message.channel.id not in MONITORED_CHANNELS:
         return
     
     if message.author == bot.user:
@@ -597,13 +603,22 @@ async def on_message(message):
         print("⏭️  No embeds found", flush=True)
         return
     
+    # Get the role for this specific channel
+    role_id = MONITORED_CHANNELS[message.channel.id]
+    
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
+    print(f"📨 Message received in monitored channel!", flush=True)
+    print(f"   Channel ID: {message.channel.id}", flush=True)
+    print(f"   Role ID: {role_id}", flush=True)
+    print(f"   Author: {message.author}", flush=True)
+    print(f"   Has embeds: {len(message.embeds)}", flush=True)
     print(f"✅ Processing {len(message.embeds)} embed(s)!", flush=True)
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
     
     for embed in message.embeds:
         try:
             # STEP 1: Send immediate ping with initial embed
-            role = message.guild.get_role(PING_ROLE_ID)
+            role = message.guild.get_role(role_id)
             initial_embed = create_initial_embed(embed)
             
             if role:
