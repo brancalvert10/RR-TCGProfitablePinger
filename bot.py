@@ -1,4 +1,30 @@
-import discord
+def should_exclude_multipacks(product_name):
+    """Determine if we should exclude multipacks based on product type"""
+    lower_name = product_name.lower()
+    
+    # Single item indicators - these should exclude multipacks
+    single_item_keywords = [
+        'tin', 'mini tin', 'booster pack', 'single pack', 'blister',
+        'theme deck', 'starter deck', 'premium collection'
+    ]
+    
+    # If product name suggests a single item, exclude multipacks
+    if any(keyword in lower_name for keyword in single_item_keywords):
+        return True
+    
+    # If it's already a multipack/box, don't exclude anything
+    multipack_keywords = ['booster box', 'display', 'case', 'bundle', 'lot', 'set of']
+    if any(keyword in lower_name for keyword in multipack_keywords):
+        return False
+    
+    # Default: don't exclude (safer for unknown products)
+    return False
+
+def get_exclusion_terms(product_name):
+    """Get eBay search exclusion terms if applicable"""
+    if should_exclude_multipacks(product_name):
+        return ' -"booster box" -display -case -lot -"set of"'
+    return ''import discord
 from discord.ext import commands
 import re
 from datetime import datetime
@@ -204,23 +230,29 @@ async def scrape_ebay_sold_prices_selenium(product_name, max_results=10):
     
     for query in search_queries:
         print(f"   Trying: {query}", flush=True)
-        result = await loop.run_in_executor(None, _scrape_ebay_sync, query, max_results)
+        result = await loop.run_in_executor(None, _scrape_ebay_sync, query, product_name, max_results)
         if result[0]:  # If we got data
             return result
     
     return None, None, 0
 
-def _scrape_ebay_sync(search_query, max_results):
+def _scrape_ebay_sync(search_query, original_product_name, max_results):
     """Synchronous Selenium scraping"""
     driver = None
     
     try:
         driver = get_driver()
         
-        # Build URL - eBay will interpret quotes as exact match
-        search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(search_query)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
+        # Add exclusions only for single-item products
+        exclusions = get_exclusion_terms(original_product_name)
+        search_with_exclusions = search_query + exclusions
         
-        print(f"   Loading: {search_url}", flush=True)
+        if exclusions:
+            print(f"      (Excluding multipacks)", flush=True)
+        
+        search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(search_with_exclusions)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
+        
+        print(f"   Loading: {search_url[:120]}...", flush=True)
         driver.get(search_url)
         
         import time
