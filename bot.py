@@ -8,6 +8,10 @@ import aiohttp
 import statistics
 from urllib.parse import quote
 import asyncio
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options
+from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 # Force stdout to flush immediately
 sys.stdout.reconfigure(line_buffering=True)
@@ -28,8 +32,8 @@ EBAY_APP_ID = os.getenv('EBAY_APP_ID')
 # eBay API Configuration
 EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 
-# Price extraction patterns
-PRICE_PATTERN = r'£(\d+\.?\d*)'
+# Price extraction patterns - allow optional space after £
+PRICE_PATTERN = r'£\s*(\d+\.?\d*)'
 
 def clean_product_name(name):
     """Clean and optimize product name for eBay search"""
@@ -44,39 +48,44 @@ def clean_product_name(name):
         cleaned = re.sub(re.escape(word), '', cleaned, flags=re.IGNORECASE)
     
     # Remove prices
-    cleaned = re.sub(r'£\d+\.?\d*', '', cleaned)
+    cleaned = re.sub(r'£\s*\d+\.?\d*', '', cleaned)
     
     # Remove URLs
     cleaned = re.sub(r'https?://\S+', '', cleaned)
     
-    # Remove extra whitespace
-    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    # Remove hyphens and replace with single space
+    cleaned = cleaned.replace(' - ', ' ')
+    cleaned = cleaned.replace('-', ' ')
+    
+    # Replace multiple spaces with single space (must be after hyphen removal)
+    cleaned = re.sub(r'\s+', ' ', cleaned)
+    
+    # Remove leading/trailing whitespace
+    cleaned = cleaned.strip()
     
     return cleaned
 
 async def get_ebay_sold_prices_api(product_name, max_results=10):
-    """Fetch recent sold prices from eBay API"""
+    """Fetch recent sold prices from eBay API with exact match"""
     if not EBAY_APP_ID:
         print("   ⚠️ No eBay API key configured", flush=True)
         return None, None, 0
     
     print(f"🔍 Searching eBay API for: '{product_name}'", flush=True)
     
-    # Build 2 search variations max
+    # Build 2 search variations - use quotes for exact match
     search_queries = []
     cleaned = clean_product_name(product_name)
-    search_queries.append(cleaned)
     
+    # Primary: Exact match with quotes
+    search_queries.append(f'"{cleaned}"')
+    
+    # Fallback: Without last word (still quoted for precision)
     words = cleaned.split()
     if len(words) >= 3:
-        search_queries.append(' '.join(words[:-1]))
+        search_queries.append(f'"{" ".join(words[:-1])}"')
     
-    # Remove duplicates
-    seen = set()
-    search_queries = [q for q in search_queries if q and not (q.lower() in seen or seen.add(q.lower()))]
-    search_queries = search_queries[:2]
-    
-    print(f"   Will try {len(search_queries)} searches: {search_queries}", flush=True)
+    print(f"   Will try {len(search_queries)} exact match searches", flush=True)
     
     for i, query in enumerate(search_queries, 1):
         try:
@@ -159,6 +168,120 @@ async def get_ebay_sold_prices_api(product_name, max_results=10):
     print(f"   ✗ No results from API", flush=True)
     return None, None, 0
 
+def get_driver():
+    """Initialize headless Chrome driver"""
+    chrome_options = Options()
+    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--no-sandbox')
+    chrome_options.add_argument('--disable-dev-shm-usage')
+    chrome_options.add_argument('--disable-gpu')
+    chrome_options.add_argument('--window-size=1920,1080')
+    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
+    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
+    chrome_options.add_argument('--disable-extensions')
+    
+    # Disable images for speed
+    prefs = {'profile.managed_default_content_settings.images': 2}
+    chrome_options.add_experimental_option('prefs', prefs)
+    chrome_options.page_load_strategy = 'eager'
+    
+    driver = webdriver.Chrome(options=chrome_options)
+    return driver
+
+async def scrape_ebay_sold_prices_selenium(product_name, max_results=10):
+    """Fallback: Scrape eBay using Selenium with exact match"""
+    print(f"🔍 Selenium fallback for: '{product_name}'", flush=True)
+    
+    cleaned = clean_product_name(product_name)
+    
+    # Use exact match by putting in quotes
+    search_query = f'"{cleaned}"'
+    
+    print(f"   Exact match search: {search_query}", flush=True)
+    
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _scrape_ebay_sync, search_query, max_results)
+    return result
+
+def _scrape_ebay_sync(search_query, max_results):
+    """Synchronous Selenium scraping"""
+    driver = None
+    
+    try:
+        driver = get_driver()
+        
+        # Build URL - eBay will interpret quotes as exact match
+        search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(search_query)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
+        
+        print(f"   Loading: {search_url}", flush=True)
+        driver.get(search_url)
+        
+        import time
+        time.sleep(1.5)
+        
+        # Try multiple methods to find items
+        items = []
+        try:
+            results_list = driver.find_element(By.CSS_SELECTOR, "ul.srp-results")
+            items = results_list.find_elements(By.TAG_NAME, "li")
+            print(f"   Found {len(items)} items", flush=True)
+        except:
+            print(f"   No items found", flush=True)
+            return None, None, 0
+        
+        if len(items) == 0:
+            return None, None, 0
+        
+        # Extract prices
+        sold_prices = []
+        for item in items[:max_results]:
+            try:
+                item_text = item.text
+                if not item_text:
+                    continue
+                
+                matches = re.findall(r'£\s*([\d,]+\.?\d*)', item_text)
+                if matches:
+                    for match in matches:
+                        try:
+                            price = float(match.replace(',', ''))
+                            if 10 < price < 10000:
+                                sold_prices.append(price)
+                                break
+                        except ValueError:
+                            continue
+            except:
+                continue
+        
+        print(f"   Extracted {len(sold_prices)} prices", flush=True)
+        
+        if sold_prices:
+            print(f"   ✅ Selenium SUCCESS!", flush=True)
+            
+            avg_price = statistics.mean(sold_prices)
+            median_price = statistics.median(sold_prices)
+            min_price = min(sold_prices)
+            max_price = max(sold_prices)
+            
+            return {
+                'average': avg_price,
+                'median': median_price,
+                'min': min_price,
+                'max': max_price,
+                'count': len(sold_prices),
+                'prices': sold_prices,
+                'query_used': search_query
+            }, median_price, len(sold_prices)
+        
+        return None, None, 0
+        
+    except Exception as e:
+        print(f"   Selenium error: {e}", flush=True)
+        return None, None, 0
+    finally:
+        if driver:
+            driver.quit()
+
 def extract_product_info(embed):
     """Extract product name and price from embed"""
     product_name = None
@@ -232,8 +355,13 @@ async def create_alert_embed(original_embed, source_message):
     if not buy_price:
         buy_price = 0
     
-    # Get eBay data using API
+    # Try eBay API first (fast)
     ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
+    
+    # If API fails, use Selenium fallback
+    if not ebay_data or sold_count == 0:
+        print(f"   API returned no data, trying Selenium...", flush=True)
+        ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
     
     # Determine actual cost basis
     actual_cost = buy_price
@@ -322,22 +450,31 @@ async def create_alert_embed(original_embed, source_message):
     
     # Links section
     links = []
+    
+    # Blacklist of domains to exclude
+    excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com']
+    
+    # Extract original product links from embed (excluding blacklisted sites)
     for field in original_embed.fields:
         if 'link' in field.name.lower():
             urls = re.findall(r'https?://[^\s\]]+', field.value)
-            if urls:
-                links.extend(urls)
-            elif 'http' in field.value:
-                links.append(field.value)
+            for url in urls:
+                # Check if URL contains any excluded domain
+                if not any(excluded in url.lower() for excluded in excluded_domains):
+                    links.append(url)
+                    break  # Only take first valid link
+            break
     
-    # Add eBay search link
-    search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(product_name)}&LH_Sold=1&LH_Complete=1"
-    links.append(f"[🔍 eBay Sold Listings]({search_url})")
+    # Add clean eBay search links
+    clean_search = quote(product_name)
+    links.append(f"[🔍 eBay Sold Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_Sold=1&LH_Complete=1)")
+    links.append(f"[🛒 Current eBay Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_ItemCondition=1000)")
+    links.append(f"[🔎 Google Search](https://www.google.co.uk/search?q={clean_search})")
     
     if links:
         alert.add_field(
-            name="🔗 Links",
-            value="\n".join(links[:6]),
+            name="🔗 Quick Links",
+            value="\n".join(links),
             inline=False
         )
     
