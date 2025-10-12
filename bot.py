@@ -358,6 +358,27 @@ def extract_product_info(embed):
     print(f"   Footer: '{embed.footer.text if embed.footer else None}'", flush=True)
     print(f"   Number of fields: {len(embed.fields)}", flush=True)
     
+    # Try to get URL from raw message data (bypassing discord.py's embed object)
+    if message:
+        try:
+            # Access the raw API data
+            for raw_embed in message.embeds:
+                if raw_embed.title == embed.title:
+                    # Try to access through __dict__ or _fields
+                    if hasattr(raw_embed, '_url'):
+                        product_link = raw_embed._url
+                        print(f"   ✅ Found URL via _url: {product_link[:60]}...", flush=True)
+                    elif '_url' in raw_embed.__dict__:
+                        product_link = raw_embed.__dict__['_url']
+                        print(f"   ✅ Found URL via __dict__: {product_link[:60]}...", flush=True)
+        except Exception as e:
+            print(f"   ⚠️ Raw message approach failed: {e}", flush=True)
+    
+    print(f"   Description: '{embed.description}'", flush=True)
+    print(f"   Author: '{embed.author.name if embed.author else None}'", flush=True)
+    print(f"   Footer: '{embed.footer.text if embed.footer else None}'", flush=True)
+    print(f"   Number of fields: {len(embed.fields)}", flush=True)
+    
     # Collect all text from embed
     all_text = []
     
