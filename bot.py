@@ -60,7 +60,8 @@ def should_exclude_multipacks(product_name):
 def get_exclusion_terms(product_name):
     """Get eBay search exclusion terms if applicable"""
     if should_exclude_multipacks(product_name):
-        return ' -"booster box" -display -case -lot -"set of"'
+        # Only exclude the most common multipacks - less aggressive
+        return ' -"booster box" -display'
     return ''
 
 def clean_product_name(name):
@@ -292,7 +293,7 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
                     for match in matches:
                         try:
                             price = float(match.replace(',', ''))
-                            if 10 < price < 10000:
+                            if 5 < price < 10000:  # Lowered from 10 to 5
                                 sold_prices.append(price)
                                 break
                         except ValueError:
