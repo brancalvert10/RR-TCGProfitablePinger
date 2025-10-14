@@ -157,15 +157,27 @@ async def get_ebay_sold_prices_api(product_name, max_results=10):
     # Build search variations - try exact match first, then broader
     search_queries = []
     cleaned = clean_product_name(product_name)
-    
-    # 1. Exact match with quotes (most precise)
-    search_queries.append(f'"{cleaned}"')
-    
-    # 2. Without quotes (broader, catches variations)
-    search_queries.append(cleaned)
-    
-    # 3. Without last word and no quotes (fallback)
     words = cleaned.split()
+    
+    # 1. Exact match with quotes (most precise) - but limit to 8 words max
+    if len(words) <= 8:
+        search_queries.append(f'"{cleaned}"')
+    else:
+        # Too long, use first 8 words
+        short_name = ' '.join(words[:8])
+        search_queries.append(f'"{short_name}"')
+    
+    # 2. Without quotes (broader) - limit to 10 words max
+    if len(words) <= 10:
+        search_queries.append(cleaned)
+    else:
+        search_queries.append(' '.join(words[:10]))
+    
+    # 3. First 6 words (fallback for very long names)
+    if len(words) >= 6:
+        search_queries.append(' '.join(words[:6]))
+    
+    # 4. Without last word and no quotes (another fallback)
     if len(words) >= 3:
         search_queries.append(' '.join(words[:-1]))
     
