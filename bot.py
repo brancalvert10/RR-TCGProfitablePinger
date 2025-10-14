@@ -134,11 +134,13 @@ def clean_product_name(name):
     # Remove URLs
     cleaned = re.sub(r'https?://\S+', '', cleaned)
     
-    # Remove hyphens and replace with single space
-    cleaned = cleaned.replace(' - ', ' ')
-    cleaned = cleaned.replace('-', ' ')
+    # Replace ALL types of dashes/hyphens with space (en dash, em dash, regular hyphen)
+    cleaned = cleaned.replace('–', ' ')  # en dash
+    cleaned = cleaned.replace('—', ' ')  # em dash
+    cleaned = cleaned.replace(' - ', ' ')  # hyphen with spaces
+    cleaned = cleaned.replace('-', ' ')  # regular hyphen
     
-    # Replace multiple spaces with single space (must be after hyphen removal)
+    # Replace multiple spaces with single space (must be after dash removal)
     cleaned = re.sub(r'\s+', ' ', cleaned)
     
     # Remove leading/trailing whitespace
@@ -764,12 +766,18 @@ async def on_message(message):
     if message.channel.id not in MONITORED_CHANNELS:
         return
     
+    # Ignore own messages
     if message.author == bot.user:
-        print("⏭️  Ignoring my own message", flush=True)
         return
     
-    if not message.embeds:
-        print("⏭️  No embeds found", flush=True)
+    # CRITICAL: Only process messages with embeds
+    if not message.embeds or len(message.embeds) == 0:
+        return
+    
+    # Additional safety check: Ignore regular user messages (only process bot messages with embeds)
+    # Most alert bots are bots, not regular users
+    if not message.author.bot and message.content:
+        # If it's a regular user with text content, skip
         return
     
     # Get the role for this specific channel
@@ -779,7 +787,7 @@ async def on_message(message):
     print(f"📨 Message received in monitored channel!", flush=True)
     print(f"   Channel ID: {message.channel.id}", flush=True)
     print(f"   Role ID: {role_id}", flush=True)
-    print(f"   Author: {message.author}", flush=True)
+    print(f"   Author: {message.author} (Bot: {message.author.bot})", flush=True)
     print(f"   Has embeds: {len(message.embeds)}", flush=True)
     print(f"✅ Processing {len(message.embeds)} embed(s)!", flush=True)
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
