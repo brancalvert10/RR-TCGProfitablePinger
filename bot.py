@@ -46,10 +46,11 @@ EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY', '721023f2981851c98f87
 EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 
 # Price extraction patterns - support multiple currencies
+# Updated to support 1-2 decimal places and prices with commas
 PRICE_PATTERNS = {
-    'GBP': r'(?:£|GBP)\s*(\d+(?:\.\d{2})?)',
-    'USD': r'(?:\$|USD)\s*(\d+(?:\.\d{2})?)',
-    'EUR': r'(?:€|EUR)\s*(\d+(?:\.\d{2})?)',
+    'GBP': r'(?:£|GBP)\s*(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)',
+    'USD': r'(?:\$|USD)\s*(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)',
+    'EUR': r'(?:€|EUR)\s*(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)',
 }
 
 # Exchange rates (will be fetched live, these are fallbacks)
@@ -521,37 +522,64 @@ def extract_product_info(embed, message=None):
             # Skip "Notice" or "Resell" fields that might have estimated prices
             if 'notice' in location.lower() or 'resell' in text_str.lower():
                 continue
-                
-            # Try each currency pattern
-            for currency, pattern in PRICE_PATTERNS.items():
-                # Check if currency symbol/code is in the text
-                has_currency = False
-                if currency == 'GBP' and ('£' in text_str or 'GBP' in text_str):
-                    has_currency = True
-                elif currency == 'USD' and ('$' in text_str or 'USD' in text_str):
-                    has_currency = True
-                elif currency == 'EUR' and ('€' in text_str or 'EUR' in text_str):
-                    has_currency = True
-                
-                if has_currency:
-                    matches = re.findall(pattern, text_str, re.IGNORECASE)
-                    if matches:
-                        try:
-                            price = float(matches[0].replace(',', ''))
-                            # Reasonable price check
-                            if 1 < price < 100000:
-                                # Convert to GBP if not already
-                                if currency != 'GBP':
-                                    original_price = price
-                                    price = price * EXCHANGE_RATES[currency]
-                                    print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
-                                else:
-                                    print(f"   ✅ Found price £{price:.2f} in {location}", flush=True)
-                                buy_price = price
-                                break
-                        except Exception as e:
-                            print(f"   Failed to parse price from {location}: {e}", flush=True)
-                            continue
+            
+            # Try to extract price - check for multiple formats
+            price_found = False
+            
+            # Format 1: "48.0 GBP" or "140.0 USD" (number then currency code with space)
+            space_currency_match = re.search(r'(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)\s+(GBP|USD|EUR)', text_str, re.IGNORECASE)
+            if space_currency_match:
+                try:
+                    price_str = space_currency_match.group(1).replace(',', '')
+                    currency = space_currency_match.group(2).upper()
+                    price = float(price_str)
+                    
+                    # Reasonable price check
+                    if 0.1 <= price < 100000:
+                        # Convert to GBP if not already
+                        if currency != 'GBP':
+                            original_price = price
+                            price = price * EXCHANGE_RATES[currency]
+                            print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
+                        else:
+                            print(f"   ✅ Found price £{price:.2f} in {location}", flush=True)
+                        buy_price = price
+                        price_found = True
+                except Exception as e:
+                    print(f"   Failed to parse space-separated currency from {location}: {e}", flush=True)
+            
+            # Format 2: Standard patterns (£0.7, $10.50, etc.)
+            if not price_found:
+                for currency, pattern in PRICE_PATTERNS.items():
+                    # Check if currency symbol/code is in the text
+                    has_currency = False
+                    if currency == 'GBP' and ('£' in text_str or 'GBP' in text_str):
+                        has_currency = True
+                    elif currency == 'USD' and ('$' in text_str or 'USD' in text_str):
+                        has_currency = True
+                    elif currency == 'EUR' and ('€' in text_str or 'EUR' in text_str):
+                        has_currency = True
+                    
+                    if has_currency:
+                        matches = re.findall(pattern, text_str, re.IGNORECASE)
+                        if matches:
+                            try:
+                                price = float(matches[0].replace(',', ''))
+                                # Reasonable price check (lowered minimum for cards like £0.7)
+                                if 0.1 <= price < 100000:
+                                    # Convert to GBP if not already
+                                    if currency != 'GBP':
+                                        original_price = price
+                                        price = price * EXCHANGE_RATES[currency]
+                                        print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
+                                    else:
+                                        print(f"   ✅ Found price £{price:.2f} in {location}", flush=True)
+                                    buy_price = price
+                                    price_found = True
+                                    break
+                            except Exception as e:
+                                print(f"   Failed to parse price from {location}: {e}", flush=True)
+                                continue
             
             if buy_price:
                 break
@@ -829,10 +857,10 @@ async def on_message(message):
                         content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
                     )
             
-            # Send product link as separate message if available
+            # Send product link as separate message if available (wrapped to prevent embed)
             link_message = None
             if product_link:
-                link_message = await message.channel.send(content=product_link)
+                link_message = await message.channel.send(content=f"<{product_link}>")
             
             print("⚡ INSTANT ping sent!", flush=True)
             
