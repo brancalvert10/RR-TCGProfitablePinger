@@ -40,12 +40,52 @@ for pair in channels_config.split(','):
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
 EBAY_APP_ID = os.getenv('EBAY_APP_ID')
+EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY', '721023f2981851c98f87a313')
 
 # eBay API Configuration
 EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
 
-# Price extraction patterns - allow optional space after £
-PRICE_PATTERN = r'£\s*(\d+\.?\d*)'
+# Price extraction patterns - support multiple currencies
+PRICE_PATTERNS = {
+    'GBP': r'(?:£|GBP)\s*(\d+(?:\.\d{2})?)',
+    'USD': r'(?:\$|USD)\s*(\d+(?:\.\d{2})?)',
+    'EUR': r'(?:€|EUR)\s*(\d+(?:\.\d{2})?)',
+}
+
+# Exchange rates (will be fetched live, these are fallbacks)
+EXCHANGE_RATES = {
+    'USD': 0.79,
+    'EUR': 0.86,
+    'GBP': 1.0,
+}
+
+async def fetch_exchange_rates():
+    """Fetch live exchange rates from API"""
+    global EXCHANGE_RATES
+    
+    if not EXCHANGE_RATE_API_KEY:
+        print("⚠️ No exchange rate API key, using fallback rates", flush=True)
+        return
+    
+    try:
+        url = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_RATE_API_KEY}/latest/GBP"
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    if data.get('result') == 'success':
+                        rates = data.get('conversion_rates', {})
+                        # Convert to GBP base (invert the rates)
+                        EXCHANGE_RATES['USD'] = 1 / rates.get('USD', 1.27) if rates.get('USD') else 0.79
+                        EXCHANGE_RATES['EUR'] = 1 / rates.get('EUR', 1.16) if rates.get('EUR') else 0.86
+                        EXCHANGE_RATES['GBP'] = 1.0
+                        print(f"✅ Exchange rates updated: USD={EXCHANGE_RATES['USD']:.4f}, EUR={EXCHANGE_RATES['EUR']:.4f}", flush=True)
+                    else:
+                        print(f"⚠️ Exchange rate API error: {data.get('error-type')}", flush=True)
+                else:
+                    print(f"⚠️ Exchange rate API returned {response.status}", flush=True)
+    except Exception as e:
+        print(f"⚠️ Failed to fetch exchange rates: {e}", flush=True)
 
 def should_exclude_multipacks(product_name):
     """Determine if we should exclude multipacks based on product type"""
@@ -444,19 +484,389 @@ def extract_product_info(embed, message=None):
     print(f"   Searching for price in {len(all_text)} text pieces...", flush=True)
     
     for location, text in all_text:
-        if text and '£' in str(text):
-            matches = re.findall(PRICE_PATTERN, str(text))
-            if matches:
-                try:
-                    price = float(matches[0].replace(',', ''))
-                    # Reasonable price check
-                    if 1 < price < 100000:
-                        buy_price = price
-                        print(f"   ✅ Found price £{buy_price} in {location}", flush=True)
-                        break
-                except Exception as e:
-                    print(f"   Failed to parse price from {location}: {e}", flush=True)
-                    continue
+        if text:
+            # Try each currency pattern
+            for currency, pattern in PRICE_PATTERNS.items():
+                if (currency == 'GBP' and '£' in str(text)) or \
+                   (currency == 'USD' and '
+    
+    if not buy_price:
+        print(f"   ❌ NO PRICE FOUND!", flush=True)
+        print(f"   Checked locations: {[loc for loc, _ in all_text]}", flush=True)
+    
+    if not product_link:
+        print(f"   ⚠️ No product link found", flush=True)
+    
+    print(f"   === END DEBUG ===", flush=True)
+    
+    return product_name, buy_price, product_link
+
+async def create_alert_embed(original_embed, source_message, ebay_data=None, resell_price=None, sold_count=0):
+    """Create a formatted alert embed with eBay resell data"""
+    
+    # Extract product info
+    product_name, buy_price, product_link = extract_product_info(original_embed, source_message)
+    
+    if not product_name:
+        product_name = "Unknown Product"
+    
+    if not buy_price:
+        buy_price = 0
+    
+    # Determine actual cost basis
+    actual_cost = buy_price
+    
+    # Create new embed
+    if ebay_data and resell_price and resell_price > actual_cost:
+        profit = resell_price - actual_cost
+        profit_percent = (profit / actual_cost) * 100 if actual_cost > 0 else 0
+        
+        # Color based on profit
+        if profit > 50:
+            color = discord.Color.gold()
+        elif profit > 20:
+            color = discord.Color.green()
+        else:
+            color = discord.Color.blue()
+    else:
+        color = discord.Color.orange()
+        profit = 0
+        profit_percent = 0
+    
+    alert = discord.Embed(
+        color=color,
+        timestamp=datetime.utcnow()
+    )
+    
+    # Title
+    alert.title = f"💰 {product_name}"
+    
+    # PROFIT AT THE TOP
+    if ebay_data and profit > 0:
+        profit_emoji = "🟢" if profit > 20 else "🟡" if profit > 10 else "🔵"
+        profit_text = f"{profit_emoji} **£{profit:.2f}** profit ({profit_percent:.1f}%)\n"
+        profit_text += f"*Based on {sold_count} recent eBay sales*"
+        
+        alert.add_field(
+            name="🎯 ESTIMATED PROFIT",
+            value=profit_text,
+            inline=False
+        )
+    elif ebay_data and sold_count > 0:
+        alert.add_field(
+            name="⚠️ LOW/NO PROFIT",
+            value=f"Recent eBay sales show minimal profit potential\nMedian sold: £{ebay_data['median']:.2f} vs Cost: £{actual_cost:.2f}",
+            inline=False
+        )
+    else:
+        alert.add_field(
+            name="❓ NO EBAY SALES DATA",
+            value="⚠️ **Could not find recent sold listings**\n\nThis could mean:\n• New/rare product\n• Product name needs refinement\n• Low demand item\n\n**Manual research required before buying!**",
+            inline=False
+        )
+    
+    # Price breakdown
+    price_info = []
+    price_info.append(f"🏷️ **Alert Buy Price:** £{buy_price:.2f}")
+    
+    if ebay_data:
+        price_info.append(f"📊 **eBay Median Sold:** £{ebay_data['median']:.2f}")
+        price_info.append(f"📈 **eBay Average Sold:** £{ebay_data['average']:.2f}")
+        price_info.append(f"💵 **Sold Price Range:** £{ebay_data['min']:.2f} - £{ebay_data['max']:.2f}")
+        if ebay_data.get('query_used') and ebay_data['query_used'] != product_name:
+            price_info.append(f"🔍 *Search used: \"{ebay_data['query_used']}\"*")
+    else:
+        price_info.append(f"❌ **Sold Data:** No recent sales found")
+    
+    alert.add_field(
+        name="📊 Price Analysis",
+        value="\n".join(price_info),
+        inline=False
+    )
+    
+    # Product details from original embed
+    details = []
+    for field in original_embed.fields:
+        field_name_lower = field.name.lower()
+        if 'status' in field_name_lower or 'stock' in field_name_lower:
+            details.append(f"**{field.name}:** {field.value}")
+    
+    if details:
+        alert.add_field(
+            name="📦 Product Info",
+            value="\n".join(details),
+            inline=False
+        )
+    
+    # Links section
+    links = []
+    
+    # Blacklist of domains to exclude
+    excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com']
+    
+    # Extract original product links from embed (excluding blacklisted sites)
+    for field in original_embed.fields:
+        if 'link' in field.name.lower():
+            urls = re.findall(r'https?://[^\s\]]+', field.value)
+            for url in urls:
+                # Check if URL contains any excluded domain
+                if not any(excluded in url.lower() for excluded in excluded_domains):
+                    links.append(url)
+                    break  # Only take first valid link
+            break
+    
+    # Add clean eBay search links
+    clean_search = quote(product_name)
+    links.append(f"[🔍 eBay Sold Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_Sold=1&LH_Complete=1)")
+    links.append(f"[🛒 Current eBay Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_ItemCondition=1000)")
+    links.append(f"[🔎 Google Search](https://www.google.co.uk/search?q={clean_search})")
+    
+    if links:
+        alert.add_field(
+            name="🔗 Quick Links",
+            value="\n".join(links),
+            inline=False
+        )
+    
+    # Add thumbnail if original has one
+    if original_embed.thumbnail:
+        alert.set_thumbnail(url=original_embed.thumbnail.url)
+    
+    # Add image if original has one
+    if original_embed.image:
+        alert.set_image(url=original_embed.image.url)
+    
+    # Footer with source
+    source_text = original_embed.author.name if original_embed.author else 'Unknown'
+    if ebay_data:
+        source_text += f" | {sold_count} sales analyzed"
+    
+    alert.set_footer(text=source_text)
+    
+    return alert, profit, sold_count
+
+def create_initial_embed(original_embed, message=None):
+    """Create a quick initial embed while searching"""
+    product_name, buy_price, product_link = extract_product_info(original_embed, message)
+    
+    if not product_name:
+        product_name = "Unknown Product"
+    
+    if not buy_price:
+        buy_price = 0
+    
+    alert = discord.Embed(
+        title=f"💰 {product_name}",
+        description="🔍 **Searching eBay for resell data...**\n\nThis may take a few seconds.",
+        color=discord.Color.blue(),
+        timestamp=datetime.utcnow()
+    )
+    
+    alert.add_field(
+        name="🏷️ Alert Buy Price",
+        value=f"£{buy_price:.2f}",
+        inline=False
+    )
+    
+    # Add thumbnail if original has one
+    if original_embed.thumbnail:
+        alert.set_thumbnail(url=original_embed.thumbnail.url)
+    
+    # Add image if original has one
+    if original_embed.image:
+        alert.set_image(url=original_embed.image.url)
+    
+    return alert
+
+@bot.event
+async def on_ready():
+    print(f'{bot.user} is now monitoring for deals!', flush=True)
+    print(f'Monitoring {len(MONITORED_CHANNELS)} channel(s):', flush=True)
+    for channel_id, role_id in MONITORED_CHANNELS.items():
+        print(f'  • Channel {channel_id} → Role {role_id}', flush=True)
+    print(f'eBay API: {"✓ Configured" if EBAY_APP_ID else "✗ Not configured"}', flush=True)
+    if EBAY_APP_ID:
+        print(f'eBay App ID: {EBAY_APP_ID[:15]}...', flush=True)
+    print(f'Exchange Rate API: {"✓ Configured" if EXCHANGE_RATE_API_KEY else "✗ Not configured"}', flush=True)
+    
+    # Fetch exchange rates on startup
+    await fetch_exchange_rates()
+    
+    print('Bot is ready and waiting for embeds...', flush=True)
+
+@bot.event
+async def on_message(message):
+    # Check if message is in a monitored channel
+    if message.channel.id not in MONITORED_CHANNELS:
+        return
+    
+    if message.author == bot.user:
+        print("⏭️  Ignoring my own message", flush=True)
+        return
+    
+    if not message.embeds:
+        print("⏭️  No embeds found", flush=True)
+        return
+    
+    # Get the role for this specific channel
+    role_id = MONITORED_CHANNELS[message.channel.id]
+    
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
+    print(f"📨 Message received in monitored channel!", flush=True)
+    print(f"   Channel ID: {message.channel.id}", flush=True)
+    print(f"   Role ID: {role_id}", flush=True)
+    print(f"   Author: {message.author}", flush=True)
+    print(f"   Has embeds: {len(message.embeds)}", flush=True)
+    print(f"✅ Processing {len(message.embeds)} embed(s)!", flush=True)
+    print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
+    
+    for embed in message.embeds:
+        try:
+            # STEP 1: IMMEDIATE PING - Extract minimal info and send ASAP
+            role = message.guild.get_role(role_id)
+            
+            # Quick extraction - just get title for initial ping
+            product_name = embed.title if embed.title else "Unknown Product"
+            product_name_clean = clean_product_name(product_name)
+            
+            # Try to get URL quickly
+            product_link = None
+            try:
+                if embed.url:
+                    product_link = str(embed.url)
+            except:
+                pass
+            
+            # Send ping IMMEDIATELY - make title clickable if we have a link
+            if product_link:
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**"
+                    )
+            else:
+                if role:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
+                    )
+                else:
+                    alert_message = await message.channel.send(
+                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
+                    )
+            
+            # Send product link as separate message if available
+            link_message = None
+            if product_link:
+                link_message = await message.channel.send(content=product_link)
+            
+            print("⚡ INSTANT ping sent!", flush=True)
+            
+            # STEP 2: Now create the initial embed and edit message
+            initial_embed = create_initial_embed(embed, message)
+            await alert_message.edit(embed=initial_embed)
+            
+            print("✅ Initial embed added, now searching eBay...", flush=True)
+            
+            # STEP 2: Search eBay in the background
+            product_name, buy_price, _ = extract_product_info(embed, message)
+            
+            # Try eBay API first (fast)
+            ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
+            
+            # If API fails, use Selenium fallback
+            if not ebay_data or sold_count == 0:
+                print(f"   API returned no data, trying Selenium...", flush=True)
+                ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
+            
+            # STEP 3: Edit the message with full analysis
+            final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
+            
+            # Update the content based on results
+            if sold_count == 0:
+                alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
+            elif profit > 50:
+                alert_status = "🔥 HIGH PROFIT DEAL"
+            elif profit > 20:
+                alert_status = "🚨 PROFITABLE DEAL"
+            elif profit > 0:
+                alert_status = "💼 DEAL DETECTED"
+            else:
+                alert_status = "ℹ️ LOW/NO PROFIT"
+            
+            # Get the product info for final edit
+            product_name_final = embed.title if embed.title else "Unknown Product"
+            product_name_final_clean = clean_product_name(product_name_final)
+            
+            # Edit main message with profit status
+            if product_link:
+                # If we have a link, make the title clickable
+                if role:
+                    await alert_message.edit(
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**",
+                        embed=final_embed
+                    )
+            else:
+                # No link, just plain text
+                if role:
+                    await alert_message.edit(
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
+                        embed=final_embed
+                    )
+                else:
+                    await alert_message.edit(
+                        content=f"**{product_name_final_clean}**\n**{alert_status}**",
+                        embed=final_embed
+                    )
+            
+            print("✅ Message updated with full analysis!", flush=True)
+        
+        except Exception as e:
+            print(f"Error processing embed: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
+            continue
+
+@bot.event
+async def on_connect():
+    print("Bot connected to Discord!", flush=True)
+
+if __name__ == "__main__":
+    if not DISCORD_TOKEN:
+        print("ERROR: DISCORD_TOKEN environment variable not set!")
+        exit(1)
+    
+    bot.run(DISCORD_TOKEN) in str(text)) or \
+                   (currency == 'EUR' and '€' in str(text)):
+                    
+                    matches = re.findall(pattern, str(text))
+                    if matches:
+                        try:
+                            price = float(matches[0].replace(',', ''))
+                            # Reasonable price check
+                            if 1 < price < 100000:
+                                # Convert to GBP if not already
+                                if currency != 'GBP':
+                                    original_price = price
+                                    price = price * EXCHANGE_RATES[currency]
+                                    print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
+                                else:
+                                    print(f"   ✅ Found price £{price} in {location}", flush=True)
+                                buy_price = price
+                                break
+                        except Exception as e:
+                            print(f"   Failed to parse price from {location}: {e}", flush=True)
+                            continue
+            
+            if buy_price:
+                break
     
     if not buy_price:
         print(f"   ❌ NO PRICE FOUND!", flush=True)
