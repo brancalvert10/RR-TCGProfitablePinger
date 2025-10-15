@@ -146,7 +146,10 @@ def clean_product_name(name):
     return cleaned
 
 def get_driver():
-    """Initialize headless Chrome driver"""
+    """Initialize headless Chrome driver with unique user data directory"""
+    import uuid
+    import tempfile
+    
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
@@ -156,6 +159,10 @@ def get_driver():
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_argument('--disable-extensions')
+    
+    # Create a unique temporary directory for this Chrome instance
+    temp_dir = tempfile.mkdtemp(prefix='chrome_')
+    chrome_options.add_argument(f'--user-data-dir={temp_dir}')
     
     # Disable images for speed
     prefs = {'profile.managed_default_content_settings.images': 2}
