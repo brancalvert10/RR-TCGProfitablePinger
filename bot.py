@@ -622,30 +622,17 @@ async def on_message(message):
             except:
                 pass
             
-            # Send ping IMMEDIATELY - make title clickable if we have a link
-            if product_link:
-                if role:
-                    alert_message = await message.channel.send(
-                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
-                    )
-                else:
-                    alert_message = await message.channel.send(
-                        content=f"**[{product_name_clean}]({product_link})**\n**🚨 NEW DEAL ALERT**"
-                    )
+            # Send ping IMMEDIATELY with bold title
+            if role:
+                alert_content = f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
             else:
-                if role:
-                    alert_message = await message.channel.send(
-                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
-                    )
-                else:
-                    alert_message = await message.channel.send(
-                        content=f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
-                    )
+                alert_content = f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
             
-            # Send product link as separate message if available (wrapped to prevent embed)
-            link_message = None
+            # Add product link on new line if available (wrapped to prevent preview)
             if product_link:
-                link_message = await message.channel.send(content=f"<{product_link}>")
+                alert_content += f"\n<{product_link}>"
+            
+            alert_message = await message.channel.send(content=alert_content)
             
             print("⚡ INSTANT ping sent!", flush=True)
             
@@ -684,31 +671,20 @@ async def on_message(message):
             product_name_final = embed.title if embed.title else "Unknown Product"
             product_name_final_clean = clean_product_name(product_name_final)
             
-            # Edit main message with profit status
-            if product_link:
-                # If we have a link, make the title clickable
-                if role:
-                    await alert_message.edit(
-                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**\n{role.mention}",
-                        embed=final_embed
-                    )
-                else:
-                    await alert_message.edit(
-                        content=f"**[{product_name_final_clean}]({product_link})**\n**{alert_status}**",
-                        embed=final_embed
-                    )
+            # Edit main message with profit status - bold title with URL on new line
+            if role:
+                final_content = f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}"
             else:
-                # No link, just plain text
-                if role:
-                    await alert_message.edit(
-                        content=f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}",
-                        embed=final_embed
-                    )
-                else:
-                    await alert_message.edit(
-                        content=f"**{product_name_final_clean}**\n**{alert_status}**",
-                        embed=final_embed
-                    )
+                final_content = f"**{product_name_final_clean}**\n**{alert_status}**"
+            
+            # Add product link on new line if available (wrapped to prevent preview)
+            if product_link:
+                final_content += f"\n<{product_link}>"
+            
+            await alert_message.edit(
+                content=final_content,
+                embed=final_embed
+            )
             
             print("✅ Message updated with full analysis!", flush=True)
         
