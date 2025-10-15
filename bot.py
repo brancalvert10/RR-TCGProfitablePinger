@@ -11,6 +11,7 @@ import asyncio
 from selenium import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
 
 print(f"Using discord library version: {discord.__version__}", flush=True)
@@ -39,14 +40,9 @@ for pair in channels_config.split(','):
             print(f"⚠️ Warning: Could not parse channel config: {pair}", flush=True)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-EBAY_APP_ID = os.getenv('EBAY_APP_ID')
 EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY', '721023f2981851c98f87a313')
 
-# eBay API Configuration
-EBAY_FINDING_API = 'https://svcs.ebay.com/services/search/FindingService/v1'
-
 # Price extraction patterns - support multiple currencies
-# Updated to support 1-2 decimal places and prices with commas
 PRICE_PATTERNS = {
     'GBP': r'(?:£|GBP)\s*(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)',
     'USD': r'(?:\$|USD)\s*(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)',
@@ -149,134 +145,10 @@ def clean_product_name(name):
     
     return cleaned
 
-async def get_ebay_sold_prices_api(product_name, max_results=10):
-    """Fetch recent sold prices from eBay API with exact match"""
-    if not EBAY_APP_ID:
-        print("   ⚠️ No eBay API key configured", flush=True)
-        return None, None, 0
-    
-    print(f"🔍 Searching eBay API for: '{product_name}'", flush=True)
-    
-    # Build search variations - try exact match first, then broader
-    search_queries = []
-    cleaned = clean_product_name(product_name)
-    words = cleaned.split()
-    
-    # 1. Exact match with quotes (most precise) - but limit to 8 words max
-    if len(words) <= 8:
-        search_queries.append(f'"{cleaned}"')
-    else:
-        # Too long, use first 8 words
-        short_name = ' '.join(words[:8])
-        search_queries.append(f'"{short_name}"')
-    
-    # 2. Without quotes (broader) - limit to 10 words max
-    if len(words) <= 10:
-        search_queries.append(cleaned)
-    else:
-        search_queries.append(' '.join(words[:10]))
-    
-    # 3. First 6 words (fallback for very long names)
-    if len(words) >= 6:
-        search_queries.append(' '.join(words[:6]))
-    
-    # 4. Without last word and no quotes (another fallback)
-    if len(words) >= 3:
-        search_queries.append(' '.join(words[:-1]))
-    
-    print(f"   Will try {len(search_queries)} searches (exact → broad)", flush=True)
-    
-    for i, query in enumerate(search_queries, 1):
-        try:
-            search_query = query.strip()
-            if not search_query:
-                continue
-            
-            print(f"   [{i}/{len(search_queries)}] API search: '{search_query}'", flush=True)
-            
-            # Add exclusions only if it's a single-item product
-            exclusions = get_exclusion_terms(product_name)
-            search_with_exclusions = search_query + exclusions
-            if exclusions:
-                print(f"      (Excluding multipacks)", flush=True)
-            
-            params = {
-                'OPERATION-NAME': 'findCompletedItems',
-                'SERVICE-VERSION': '1.0.0',
-                'SECURITY-APPNAME': EBAY_APP_ID,
-                'RESPONSE-DATA-FORMAT': 'JSON',
-                'REST-PAYLOAD': '',
-                'keywords': search_with_exclusions,
-                'itemFilter(0).name': 'SoldItemsOnly',
-                'itemFilter(0).value': 'true',
-                'itemFilter(1).name': 'ListingType',
-                'itemFilter(1).value': 'FixedPrice',
-                'sortOrder': 'EndTimeSoonest',
-                'paginationInput.entriesPerPage': max_results,
-                'GLOBAL-ID': 'EBAY-GB'
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(EBAY_FINDING_API, params=params, timeout=10) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        # Parse response
-                        search_result = data.get('findCompletedItemsResponse', [{}])[0]
-                        
-                        # Check for API errors
-                        ack = search_result.get('ack', [''])[0]
-                        if ack == 'Failure':
-                            error_msg = search_result.get('errorMessage', [{}])[0]
-                            print(f"      ❌ API error: {error_msg}", flush=True)
-                            continue
-                        
-                        items = search_result.get('searchResult', [{}])[0].get('item', [])
-                        
-                        if not items:
-                            print(f"      No results", flush=True)
-                            continue
-                        
-                        # Extract sold prices
-                        sold_prices = []
-                        for item in items:
-                            selling_status = item.get('sellingStatus', [{}])[0]
-                            converted_price = selling_status.get('convertedCurrentPrice', [{}])[0]
-                            price = float(converted_price.get('__value__', 0))
-                            if price > 0:
-                                sold_prices.append(price)
-                        
-                        if sold_prices:
-                            print(f"      ✅ Found {len(sold_prices)} sales!", flush=True)
-                            
-                            avg_price = statistics.mean(sold_prices)
-                            median_price = statistics.median(sold_prices)
-                            min_price = min(sold_prices)
-                            max_price = max(sold_prices)
-                            
-                            return {
-                                'average': avg_price,
-                                'median': median_price,
-                                'min': min_price,
-                                'max': max_price,
-                                'count': len(sold_prices),
-                                'prices': sold_prices,
-                                'query_used': query
-                            }, median_price, len(sold_prices)
-                    else:
-                        print(f"      HTTP {response.status}", flush=True)
-        
-        except Exception as e:
-            print(f"      Error: {e}", flush=True)
-            continue
-    
-    print(f"   ✗ No results from API", flush=True)
-    return None, None, 0
-
 def get_driver():
     """Initialize headless Chrome driver"""
     chrome_options = Options()
-    chrome_options.add_argument('--headless')
+    chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
@@ -290,12 +162,14 @@ def get_driver():
     chrome_options.add_experimental_option('prefs', prefs)
     chrome_options.page_load_strategy = 'eager'
     
-    driver = webdriver.Chrome(options=chrome_options)
+    # Use the ChromeDriver installed in /usr/local/bin
+    service = Service('/usr/local/bin/chromedriver')
+    driver = webdriver.Chrome(service=service, options=chrome_options)
     return driver
 
-async def scrape_ebay_sold_prices_selenium(product_name, max_results=10):
-    """Fallback: Scrape eBay using Selenium"""
-    print(f"🔍 Selenium fallback for: '{product_name}'", flush=True)
+async def scrape_ebay_sold_prices_selenium(product_name, max_results=15):
+    """Scrape eBay using Selenium"""
+    print(f"🔍 Searching eBay for: '{product_name}'", flush=True)
     
     cleaned = clean_product_name(product_name)
     
@@ -332,7 +206,7 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
         driver.get(search_url)
         
         import time
-        time.sleep(1.5)
+        time.sleep(2)  # Wait for page to load
         
         # Try multiple methods to find items
         items = []
@@ -360,7 +234,7 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
                     for match in matches:
                         try:
                             price = float(match.replace(',', ''))
-                            if 5 < price < 10000:
+                            if 0.5 < price < 10000:  # Reasonable price range
                                 sold_prices.append(price)
                                 break
                         except ValueError:
@@ -392,6 +266,8 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
         
     except Exception as e:
         print(f"   Selenium error: {e}", flush=True)
+        import traceback
+        traceback.print_exc()
         return None, None, 0
     finally:
         if driver:
@@ -778,9 +654,7 @@ async def on_ready():
     print(f'Monitoring {len(MONITORED_CHANNELS)} channel(s):', flush=True)
     for channel_id, role_id in MONITORED_CHANNELS.items():
         print(f'  • Channel {channel_id} → Role {role_id}', flush=True)
-    print(f'eBay API: {"✓ Configured" if EBAY_APP_ID else "✗ Not configured"}', flush=True)
-    if EBAY_APP_ID:
-        print(f'eBay App ID: {EBAY_APP_ID[:15]}...', flush=True)
+    print(f'Using Selenium with ChromeDriver for eBay scraping', flush=True)
     print(f'Exchange Rate API: {"✓ Configured" if EXCHANGE_RATE_API_KEY else "✗ Not configured"}', flush=True)
     
     # Fetch exchange rates on startup
@@ -870,18 +744,12 @@ async def on_message(message):
             
             print("✅ Initial embed added, now searching eBay...", flush=True)
             
-            # STEP 2: Search eBay in the background
+            # STEP 3: Search eBay using Selenium
             product_name, buy_price, _ = extract_product_info(embed, message)
             
-            # Try eBay API first (fast)
-            ebay_data, resell_price, sold_count = await get_ebay_sold_prices_api(product_name)
+            ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
             
-            # If API fails, use Selenium fallback
-            if not ebay_data or sold_count == 0:
-                print(f"   API returned no data, trying Selenium...", flush=True)
-                ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
-            
-            # STEP 3: Edit the message with full analysis
+            # STEP 4: Edit the message with full analysis
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results
