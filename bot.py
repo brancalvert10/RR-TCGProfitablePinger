@@ -472,7 +472,7 @@ def extract_product_info(embed, message=None):
     return product_name, buy_price, product_link
 
 async def create_alert_embed(original_embed, source_message, ebay_data=None, resell_price=None, sold_count=0):
-    """Create a formatted alert embed with eBay resell data"""
+    """Calculate profit data (no embed needed anymore)"""
     
     # Extract product info
     product_name, buy_price, product_link = extract_product_info(original_embed, source_message)
@@ -489,75 +489,14 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     # Calculate profit
     if ebay_data and resell_price and resell_price > actual_cost:
         profit = resell_price - actual_cost
-        profit_percent = (profit / actual_cost) * 100 if actual_cost > 0 else 0
-        
-        # Color based on profit
-        if profit > 50:
-            color = discord.Color.gold()
-        elif profit > 20:
-            color = discord.Color.green()
-        else:
-            color = discord.Color.blue()
     else:
-        color = discord.Color.orange()
         profit = 0
-        profit_percent = 0
     
-    alert = discord.Embed(
-        color=color,
-        timestamp=datetime.utcnow()
-    )
-    
-    # Add thumbnail if original has one
-    if original_embed.thumbnail:
-        alert.set_thumbnail(url=original_embed.thumbnail.url)
-    
-    # Add image if original has one
-    if original_embed.image:
-        alert.set_image(url=original_embed.image.url)
-    
-    # Footer with eBay analysis details (hidden but available)
-    if ebay_data:
-        footer_text = f"Buy: £{buy_price:.2f} | eBay Median: £{ebay_data['median']:.2f} | Avg: £{ebay_data['average']:.2f} | Range: £{ebay_data['min']:.2f}-£{ebay_data['max']:.2f} | {sold_count} sales"
-    else:
-        footer_text = f"Buy: £{buy_price:.2f} | No eBay sales data found"
-    
-    alert.set_footer(text=footer_text)
-    
-    return alert, profit, sold_count
+    return None, profit, sold_count
 
 def create_initial_embed(original_embed, message=None):
-    """Create a quick initial embed while searching"""
-    product_name, buy_price, product_link = extract_product_info(original_embed, message)
-    
-    if not product_name:
-        product_name = "Unknown Product"
-    
-    if not buy_price:
-        buy_price = 0
-    
-    alert = discord.Embed(
-        title=f"💰 {product_name}",
-        description="🔍 **Searching eBay for resell data...**\n\nThis may take a few seconds.",
-        color=discord.Color.blue(),
-        timestamp=datetime.utcnow()
-    )
-    
-    alert.add_field(
-        name="🏷️ Alert Buy Price",
-        value=f"£{buy_price:.2f}",
-        inline=False
-    )
-    
-    # Add thumbnail if original has one
-    if original_embed.thumbnail:
-        alert.set_thumbnail(url=original_embed.thumbnail.url)
-    
-    # Add image if original has one
-    if original_embed.image:
-        alert.set_image(url=original_embed.image.url)
-    
-    return alert
+    """No initial embed needed - just return None"""
+    return None
 
 @bot.event
 async def on_ready():
@@ -636,18 +575,15 @@ async def on_message(message):
             
             print("⚡ INSTANT ping sent!", flush=True)
             
-            # STEP 2: Now create the initial embed and edit message
-            initial_embed = create_initial_embed(embed, message)
-            await alert_message.edit(embed=initial_embed)
-            
-            print("✅ Initial embed added, now searching eBay...", flush=True)
+            # STEP 2: Don't add any embed initially, just search eBay
+            print("✅ Initial message sent, now searching eBay...", flush=True)
             
             # STEP 3: Search eBay using Selenium
             product_name, buy_price, _ = extract_product_info(embed, message)
             
             ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
             
-            # STEP 4: Edit the message with full analysis
+            # STEP 4: Edit the message with final status (no embed)
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
             # Update the content based on results - include profit amount inline
@@ -671,7 +607,7 @@ async def on_message(message):
             product_name_final = embed.title if embed.title else "Unknown Product"
             product_name_final_clean = clean_product_name(product_name_final)
             
-            # Edit main message with profit status - bold title with URL on new line
+            # Edit main message with profit status - no embed
             if role:
                 final_content = f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}"
             else:
@@ -681,10 +617,7 @@ async def on_message(message):
             if product_link:
                 final_content += f"\n<{product_link}>"
             
-            await alert_message.edit(
-                content=final_content,
-                embed=final_embed
-            )
+            await alert_message.edit(content=final_content)
             
             print("✅ Message updated with full analysis!", flush=True)
         
