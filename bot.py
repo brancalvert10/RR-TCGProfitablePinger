@@ -486,7 +486,7 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     # Determine actual cost basis
     actual_cost = buy_price
     
-    # Create new embed
+    # Calculate profit
     if ebay_data and resell_price and resell_price > actual_cost:
         profit = resell_price - actual_cost
         profit_percent = (profit / actual_cost) * 100 if actual_cost > 0 else 0
@@ -508,96 +508,6 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
         timestamp=datetime.utcnow()
     )
     
-    # Title
-    alert.title = f"💰 {product_name}"
-    
-    # PROFIT AT THE TOP
-    if ebay_data and profit > 0:
-        profit_emoji = "🟢" if profit > 20 else "🟡" if profit > 10 else "🔵"
-        profit_text = f"{profit_emoji} **£{profit:.2f}** profit ({profit_percent:.1f}%)\n"
-        profit_text += f"*Based on {sold_count} recent eBay sales*"
-        
-        alert.add_field(
-            name="🎯 ESTIMATED PROFIT",
-            value=profit_text,
-            inline=False
-        )
-    elif ebay_data and sold_count > 0:
-        alert.add_field(
-            name="⚠️ LOW/NO PROFIT",
-            value=f"Recent eBay sales show minimal profit potential\nMedian sold: £{ebay_data['median']:.2f} vs Cost: £{actual_cost:.2f}",
-            inline=False
-        )
-    else:
-        alert.add_field(
-            name="❓ NO EBAY SALES DATA",
-            value="⚠️ **Could not find recent sold listings**\n\nThis could mean:\n• New/rare product\n• Product name needs refinement\n• Low demand item\n\n**Manual research required before buying!**",
-            inline=False
-        )
-    
-    # Price breakdown
-    price_info = []
-    price_info.append(f"🏷️ **Alert Buy Price:** £{buy_price:.2f}")
-    
-    if ebay_data:
-        price_info.append(f"📊 **eBay Median Sold:** £{ebay_data['median']:.2f}")
-        price_info.append(f"📈 **eBay Average Sold:** £{ebay_data['average']:.2f}")
-        price_info.append(f"💵 **Sold Price Range:** £{ebay_data['min']:.2f} - £{ebay_data['max']:.2f}")
-        if ebay_data.get('query_used') and ebay_data['query_used'] != product_name:
-            price_info.append(f"🔍 *Search used: \"{ebay_data['query_used']}\"*")
-    else:
-        price_info.append(f"❌ **Sold Data:** No recent sales found")
-    
-    alert.add_field(
-        name="📊 Price Analysis",
-        value="\n".join(price_info),
-        inline=False
-    )
-    
-    # Product details from original embed
-    details = []
-    for field in original_embed.fields:
-        field_name_lower = field.name.lower()
-        if 'status' in field_name_lower or 'stock' in field_name_lower:
-            details.append(f"**{field.name}:** {field.value}")
-    
-    if details:
-        alert.add_field(
-            name="📦 Product Info",
-            value="\n".join(details),
-            inline=False
-        )
-    
-    # Links section
-    links = []
-    
-    # Blacklist of domains to exclude
-    excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com']
-    
-    # Extract original product links from embed (excluding blacklisted sites)
-    for field in original_embed.fields:
-        if 'link' in field.name.lower():
-            urls = re.findall(r'https?://[^\s\]]+', field.value)
-            for url in urls:
-                # Check if URL contains any excluded domain
-                if not any(excluded in url.lower() for excluded in excluded_domains):
-                    links.append(url)
-                    break  # Only take first valid link
-            break
-    
-    # Add clean eBay search links
-    clean_search = quote(product_name)
-    links.append(f"[🔍 eBay Sold Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_Sold=1&LH_Complete=1)")
-    links.append(f"[🛒 Current eBay Listings](https://www.ebay.co.uk/sch/i.html?_nkw={clean_search}&LH_ItemCondition=1000)")
-    links.append(f"[🔎 Google Search](https://www.google.co.uk/search?q={clean_search})")
-    
-    if links:
-        alert.add_field(
-            name="🔗 Quick Links",
-            value="\n".join(links),
-            inline=False
-        )
-    
     # Add thumbnail if original has one
     if original_embed.thumbnail:
         alert.set_thumbnail(url=original_embed.thumbnail.url)
@@ -606,12 +516,13 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     if original_embed.image:
         alert.set_image(url=original_embed.image.url)
     
-    # Footer with source
-    source_text = original_embed.author.name if original_embed.author else 'Unknown'
+    # Footer with eBay analysis details (hidden but available)
     if ebay_data:
-        source_text += f" | {sold_count} sales analyzed"
+        footer_text = f"Buy: £{buy_price:.2f} | eBay Median: £{ebay_data['median']:.2f} | Avg: £{ebay_data['average']:.2f} | Range: £{ebay_data['min']:.2f}-£{ebay_data['max']:.2f} | {sold_count} sales"
+    else:
+        footer_text = f"Buy: £{buy_price:.2f} | No eBay sales data found"
     
-    alert.set_footer(text=source_text)
+    alert.set_footer(text=footer_text)
     
     return alert, profit, sold_count
 
@@ -752,17 +663,22 @@ async def on_message(message):
             # STEP 4: Edit the message with full analysis
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
-            # Update the content based on results
+            # Update the content based on results - include profit amount inline
             if sold_count == 0:
                 alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
             elif profit > 50:
-                alert_status = "🔥 HIGH PROFIT DEAL"
+                alert_status = f"🔥 HIGH PROFIT (£{profit:.2f})"
             elif profit > 20:
-                alert_status = "🚨 PROFITABLE DEAL"
+                alert_status = f"🚨 PROFITABLE (£{profit:.2f})"
             elif profit > 0:
-                alert_status = "💼 DEAL DETECTED"
+                alert_status = f"💼 SMALL PROFIT (£{profit:.2f})"
             else:
-                alert_status = "ℹ️ LOW/NO PROFIT"
+                if ebay_data:
+                    # Show loss amount
+                    loss = abs(profit)
+                    alert_status = f"⚠️ LOW/NO PROFIT (-£{loss:.2f})"
+                else:
+                    alert_status = "⚠️ NO SALES DATA"
             
             # Get the product info for final edit
             product_name_final = embed.title if embed.title else "Unknown Product"
