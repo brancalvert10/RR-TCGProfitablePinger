@@ -13,9 +13,6 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.common.exceptions import TimeoutException, NoSuchElementException
-import uuid
-import tempfile
-import shutil
 
 print(f"Using discord library version: {discord.__version__}", flush=True)
 
@@ -150,61 +147,32 @@ def clean_product_name(name):
 
 def get_driver():
     """Initialize headless Chrome driver with unique user data directory"""
+    import uuid
+    import tempfile
+    
     chrome_options = Options()
     chrome_options.add_argument('--headless=new')
     chrome_options.add_argument('--no-sandbox')
     chrome_options.add_argument('--disable-dev-shm-usage')
     chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--disable-software-rasterizer')
     chrome_options.add_argument('--window-size=1920,1080')
     chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
     chrome_options.add_argument('--disable-blink-features=AutomationControlled')
     chrome_options.add_argument('--disable-extensions')
-    chrome_options.add_argument('--disable-setuid-sandbox')
     
-    # Create a unique temporary directory with UUID to prevent conflicts
-    unique_id = str(uuid.uuid4())
-    temp_dir = tempfile.mkdtemp(prefix=f'chrome_{unique_id}_')
+    # Create a unique temporary directory for this Chrome instance
+    temp_dir = tempfile.mkdtemp(prefix='chrome_')
     chrome_options.add_argument(f'--user-data-dir={temp_dir}')
     
-    # Additional stability options
-    chrome_options.add_argument('--disable-background-networking')
-    chrome_options.add_argument('--disable-default-apps')
-    chrome_options.add_argument('--disable-sync')
-    chrome_options.add_argument('--metrics-recording-only')
-    chrome_options.add_argument('--mute-audio')
-    chrome_options.add_argument('--no-first-run')
-    
     # Disable images for speed
-    prefs = {
-        'profile.managed_default_content_settings.images': 2,
-        'disk-cache-size': 4096
-    }
+    prefs = {'profile.managed_default_content_settings.images': 2}
     chrome_options.add_experimental_option('prefs', prefs)
     chrome_options.page_load_strategy = 'eager'
     
-    try:
-        # Try with explicit ChromeDriver path
-        service = Service('/usr/local/bin/chromedriver')
-        driver = webdriver.Chrome(service=service, options=chrome_options)
-        # Store temp_dir for cleanup
-        driver._temp_dir = temp_dir
-        return driver
-    except Exception as e:
-        print(f"Failed to create driver with explicit path: {e}", flush=True)
-        # Try without explicit service
-        try:
-            driver = webdriver.Chrome(options=chrome_options)
-            driver._temp_dir = temp_dir
-            return driver
-        except Exception as e2:
-            print(f"Failed to create driver without service: {e2}", flush=True)
-            # Clean up temp directory
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
-            raise
+    # Use the ChromeDriver installed in /usr/local/bin
+    service = Service('/usr/local/bin/chromedriver')
+    driver = webdriver.Chrome(service=service, options=chrome_options)
+    return driver
 
 async def scrape_ebay_sold_prices_selenium(product_name, max_results=15):
     """Scrape eBay using Selenium"""
@@ -228,12 +196,9 @@ async def scrape_ebay_sold_prices_selenium(product_name, max_results=15):
 def _scrape_ebay_sync(search_query, original_product_name, max_results):
     """Synchronous Selenium scraping"""
     driver = None
-    temp_dir = None
     
     try:
         driver = get_driver()
-        # Store temp dir for cleanup
-        temp_dir = getattr(driver, '_temp_dir', None)
         
         # Add exclusions only for single-item products
         exclusions = get_exclusion_terms(original_product_name)
@@ -313,17 +278,7 @@ def _scrape_ebay_sync(search_query, original_product_name, max_results):
         return None, None, 0
     finally:
         if driver:
-            try:
-                driver.quit()
-            except:
-                pass
-        
-        # Clean up temp directory
-        if temp_dir:
-            try:
-                shutil.rmtree(temp_dir, ignore_errors=True)
-            except:
-                pass
+            driver.quit()
 
 def extract_product_info(embed, message=None):
     """Extract product name, price, and link from embed"""
