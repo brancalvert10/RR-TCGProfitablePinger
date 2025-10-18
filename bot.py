@@ -6,13 +6,10 @@ import os
 import sys
 import aiohttp
 import statistics
-from urllib.parse import quote
+from urllib.parse import quote, urlencode
 import asyncio
-from selenium import webdriver
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.chrome.service import Service
-from selenium.common.exceptions import TimeoutException, NoSuchElementException
+import json
+from bs4 import BeautifulSoup
 
 print(f"Using discord library version: {discord.__version__}", flush=True)
 
@@ -40,7 +37,9 @@ for pair in channels_config.split(','):
             print(f"⚠️ Warning: Could not parse channel config: {pair}", flush=True)
 
 DISCORD_TOKEN = os.getenv('DISCORD_TOKEN')
-EXCHANGE_RATE_API_KEY = os.getenv('EXCHANGE_RATE_API_KEY', '721023f2981851c98f87a313')
+
+# Hardcoded exchange rate API key (no env variable needed)
+EXCHANGE_RATE_API_KEY = '721023f2981851c98f87a313'
 
 # Price extraction patterns - support multiple currencies
 PRICE_PATTERNS = {
@@ -67,7 +66,7 @@ async def fetch_exchange_rates():
     try:
         url = f"https://v6.exchangerate-api.com/v6/{EXCHANGE_RATE_API_KEY}/latest/GBP"
         async with aiohttp.ClientSession() as session:
-            async with session.get(url, timeout=5) as response:
+            async with session.get(url, timeout=10) as response:
                 if response.status == 200:
                     data = await response.json()
                     if data.get('result') == 'success':
@@ -91,7 +90,7 @@ def should_exclude_multipacks(product_name):
     # Single item indicators - these should exclude multipacks
     single_item_keywords = [
         'tin', 'mini tin', 'booster pack', 'single pack', 'blister',
-        'theme deck', 'starter deck', 'premium collection'
+        'theme deck', 'starter deck'
     ]
     
     # If product name suggests a single item, exclude multipacks
@@ -99,7 +98,7 @@ def should_exclude_multipacks(product_name):
         return True
     
     # If it's already a multipack/box, don't exclude anything
-    multipack_keywords = ['booster box', 'display', 'case', 'bundle', 'lot', 'set of']
+    multipack_keywords = ['booster box', 'display', 'case', 'bundle', 'lot', 'set of', 'collection']
     if any(keyword in lower_name for keyword in multipack_keywords):
         return False
     
@@ -109,7 +108,7 @@ def should_exclude_multipacks(product_name):
 def get_exclusion_terms(product_name):
     """Get eBay search exclusion terms if applicable"""
     if should_exclude_multipacks(product_name):
-        # Only exclude the most common multipacks - less aggressive
+        # Only exclude the most common multipacks
         return ' -"booster box" -display'
     return ''
 
@@ -119,7 +118,7 @@ def clean_product_name(name):
         return name
     
     # Remove common words that might narrow search too much
-    remove_words = ['[TEST]', 'bundle']
+    remove_words = ['[TEST]', 'bundle', 'Pokémon TCG -', 'Pokemon TCG -', 'Pokémon TCG', 'Pokemon TCG']
     cleaned = name
     
     for word in remove_words:
@@ -131,13 +130,16 @@ def clean_product_name(name):
     # Remove URLs
     cleaned = re.sub(r'https?://\S+', '', cleaned)
     
-    # Replace ALL types of dashes/hyphens with space (en dash, em dash, regular hyphen)
+    # Replace ALL types of dashes/hyphens with space
     cleaned = cleaned.replace('–', ' ')  # en dash
-    cleaned = cleaned.replace('—', ' ')  # em dash
+    cleaned = cleaned.replace('—', ' ')  # em dash  
     cleaned = cleaned.replace(' - ', ' ')  # hyphen with spaces
     cleaned = cleaned.replace('-', ' ')  # regular hyphen
     
-    # Replace multiple spaces with single space (must be after dash removal)
+    # Remove extra brand mentions and TCG
+    cleaned = re.sub(r'\b(TCG|Pokemon|Pokémon)\b', '', cleaned, flags=re.IGNORECASE)
+    
+    # Replace multiple spaces with single space
     cleaned = re.sub(r'\s+', ' ', cleaned)
     
     # Remove leading/trailing whitespace
@@ -145,140 +147,147 @@ def clean_product_name(name):
     
     return cleaned
 
-def get_driver():
-    """Initialize headless Chrome driver with unique user data directory"""
-    import uuid
-    import tempfile
-    
-    chrome_options = Options()
-    chrome_options.add_argument('--headless=new')
-    chrome_options.add_argument('--no-sandbox')
-    chrome_options.add_argument('--disable-dev-shm-usage')
-    chrome_options.add_argument('--disable-gpu')
-    chrome_options.add_argument('--window-size=1920,1080')
-    chrome_options.add_argument('--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36')
-    chrome_options.add_argument('--disable-blink-features=AutomationControlled')
-    chrome_options.add_argument('--disable-extensions')
-    
-    # Create a unique temporary directory for this Chrome instance
-    temp_dir = tempfile.mkdtemp(prefix='chrome_')
-    chrome_options.add_argument(f'--user-data-dir={temp_dir}')
-    
-    # Disable images for speed
-    prefs = {'profile.managed_default_content_settings.images': 2}
-    chrome_options.add_experimental_option('prefs', prefs)
-    chrome_options.page_load_strategy = 'eager'
-    
-    # Use the ChromeDriver installed in /usr/local/bin
-    service = Service('/usr/local/bin/chromedriver')
-    driver = webdriver.Chrome(service=service, options=chrome_options)
-    return driver
-
-async def scrape_ebay_sold_prices_selenium(product_name, max_results=15):
-    """Scrape eBay using Selenium"""
+async def scrape_ebay_sold_prices(product_name, max_results=15):
+    """Scrape eBay using the EXACT inspect element structure"""
     print(f"🔍 Searching eBay for: '{product_name}'", flush=True)
     
     cleaned = clean_product_name(product_name)
+    exclusions = get_exclusion_terms(product_name)
     
-    # Try exact match first, then without quotes
-    search_queries = [f'"{cleaned}"', cleaned]
+    if exclusions:
+        print(f"   Excluding multipacks", flush=True)
     
-    loop = asyncio.get_event_loop()
+    # Build search URL with sold/completed filter
+    search_query = cleaned + exclusions
+    search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(search_query)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
     
-    for query in search_queries:
-        print(f"   Trying: {query}", flush=True)
-        result = await loop.run_in_executor(None, _scrape_ebay_sync, query, product_name, max_results)
-        if result[0]:  # If we got data
-            return result
+    print(f"   URL: {search_url[:100]}...", flush=True)
     
-    return None, None, 0
-
-def _scrape_ebay_sync(search_query, original_product_name, max_results):
-    """Synchronous Selenium scraping"""
-    driver = None
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
+        'Accept-Language': 'en-GB,en;q=0.5',
+        'Accept-Encoding': 'gzip, deflate, br',
+        'DNT': '1',
+        'Connection': 'keep-alive',
+        'Upgrade-Insecure-Requests': '1',
+        'Sec-Fetch-Dest': 'document',
+        'Sec-Fetch-Mode': 'navigate',
+        'Sec-Fetch-Site': 'none',
+        'Cache-Control': 'max-age=0'
+    }
     
     try:
-        driver = get_driver()
-        
-        # Add exclusions only for single-item products
-        exclusions = get_exclusion_terms(original_product_name)
-        search_with_exclusions = search_query + exclusions
-        
-        if exclusions:
-            print(f"      (Excluding multipacks)", flush=True)
-        
-        search_url = f"https://www.ebay.co.uk/sch/i.html?_nkw={quote(search_with_exclusions)}&LH_Sold=1&LH_Complete=1&LH_ItemCondition=1000"
-        
-        print(f"   Loading: {search_url[:120]}...", flush=True)
-        driver.get(search_url)
-        
-        import time
-        time.sleep(2)  # Wait for page to load
-        
-        # Try multiple methods to find items
-        items = []
-        try:
-            results_list = driver.find_element(By.CSS_SELECTOR, "ul.srp-results")
-            items = results_list.find_elements(By.TAG_NAME, "li")
-            print(f"   Found {len(items)} items", flush=True)
-        except:
-            print(f"   No items found", flush=True)
-            return None, None, 0
-        
-        if len(items) == 0:
-            return None, None, 0
-        
-        # Extract prices
-        sold_prices = []
-        for item in items[:max_results]:
-            try:
-                item_text = item.text
-                if not item_text:
-                    continue
+        async with aiohttp.ClientSession() as session:
+            async with session.get(search_url, headers=headers, timeout=15) as response:
+                if response.status != 200:
+                    print(f"   ❌ eBay returned status {response.status}", flush=True)
+                    return None, None, 0
                 
-                matches = re.findall(r'£\s*([\d,]+\.?\d*)', item_text)
-                if matches:
-                    for match in matches:
-                        try:
-                            price = float(match.replace(',', ''))
-                            if 0.5 < price < 10000:  # Reasonable price range
-                                sold_prices.append(price)
-                                break
-                        except ValueError:
-                            continue
-            except:
-                continue
-        
-        print(f"   Extracted {len(sold_prices)} prices", flush=True)
-        
-        if sold_prices:
-            print(f"   ✅ Selenium SUCCESS!", flush=True)
-            
-            avg_price = statistics.mean(sold_prices)
-            median_price = statistics.median(sold_prices)
-            min_price = min(sold_prices)
-            max_price = max(sold_prices)
-            
-            return {
-                'average': avg_price,
-                'median': median_price,
-                'min': min_price,
-                'max': max_price,
-                'count': len(sold_prices),
-                'prices': sold_prices,
-                'query_used': search_query
-            }, median_price, len(sold_prices)
-        
+                html = await response.text()
+                
+                # Parse with BeautifulSoup
+                soup = BeautifulSoup(html, 'html.parser')
+                
+                # Find all card containers using the EXACT structure you showed
+                # Looking for: div.su-card-container__attributes
+                card_containers = soup.find_all('div', class_='su-card-container__attributes')
+                
+                if not card_containers or len(card_containers) == 0:
+                    print(f"   ⚠️ No su-card-container__attributes found, trying fallback...", flush=True)
+                    
+                    # Fallback: Try old method
+                    items_list = soup.find('ul', class_='srp-results')
+                    if items_list:
+                        items = items_list.find_all('li', class_='s-item')
+                        card_containers = items  # Use old method
+                    else:
+                        print(f"   ❌ No results found with any method", flush=True)
+                        return None, None, 0
+                
+                print(f"   Found {len(card_containers)} listings", flush=True)
+                
+                sold_prices = []
+                
+                for container in card_containers[:max_results]:
+                    try:
+                        # Method 1: Look for the EXACT structure you showed
+                        # <span class="su-styled-text positive bold large-1 s-card__price">£57.87</span>
+                        price_span = container.find('span', class_='s-card__price')
+                        
+                        if price_span:
+                            price_text = price_span.get_text(strip=True)
+                            
+                            # Extract price - looking for £XX.XX format
+                            price_match = re.search(r'£\s*([\d,]+\.?\d*)', price_text)
+                            
+                            if price_match:
+                                try:
+                                    price = float(price_match.group(1).replace(',', ''))
+                                    
+                                    # Reasonable price range
+                                    if 0.5 < price < 10000:
+                                        sold_prices.append(price)
+                                        
+                                except ValueError:
+                                    continue
+                        
+                        # Method 2: Fallback to old s-item__price if new structure not found
+                        elif container.find('span', class_='s-item__price'):
+                            price_span = container.find('span', class_='s-item__price')
+                            price_text = price_span.get_text(strip=True)
+                            
+                            price_match = re.search(r'£\s*([\d,]+\.?\d*)', price_text)
+                            
+                            if price_match:
+                                try:
+                                    price = float(price_match.group(1).replace(',', ''))
+                                    
+                                    if 0.5 < price < 10000:
+                                        sold_prices.append(price)
+                                        
+                                except ValueError:
+                                    continue
+                    
+                    except Exception as e:
+                        continue
+                
+                print(f"   Extracted {len(sold_prices)} valid prices", flush=True)
+                
+                if sold_prices:
+                    print(f"   ✅ SUCCESS! Found {len(sold_prices)} sold prices", flush=True)
+                    
+                    avg_price = statistics.mean(sold_prices)
+                    median_price = statistics.median(sold_prices)
+                    min_price = min(sold_prices)
+                    max_price = max(sold_prices)
+                    
+                    # Print sample prices for debugging
+                    sample = sold_prices[:5]
+                    print(f"   Sample prices: {sample}", flush=True)
+                    print(f"   Median: £{median_price:.2f}", flush=True)
+                    
+                    return {
+                        'average': avg_price,
+                        'median': median_price,
+                        'min': min_price,
+                        'max': max_price,
+                        'count': len(sold_prices),
+                        'prices': sold_prices,
+                        'query_used': search_query
+                    }, median_price, len(sold_prices)
+                
+                print(f"   ❌ No valid prices extracted", flush=True)
+                return None, None, 0
+                
+    except asyncio.TimeoutError:
+        print(f"   ❌ Request timed out", flush=True)
         return None, None, 0
-        
     except Exception as e:
-        print(f"   Selenium error: {e}", flush=True)
+        print(f"   ❌ Error: {e}", flush=True)
         import traceback
         traceback.print_exc()
         return None, None, 0
-    finally:
-        if driver:
-            driver.quit()
 
 def extract_product_info(embed, message=None):
     """Extract product name, price, and link from embed"""
@@ -286,55 +295,33 @@ def extract_product_info(embed, message=None):
     buy_price = None
     product_link = None
     
-    # Debug: Print entire embed structure FIRST
-    print(f"   === FULL EMBED DEBUG ===", flush=True)
-    print(f"   Title: '{embed.title}'", flush=True)
-    
     # Get product name from title
     if embed.title:
-        product_name = clean_product_name(embed.title)
+        product_name = embed.title
     
-    # Try to get URL from raw message data (bypassing discord.py's embed object)
+    # Try to get URL from embed
     if message:
         try:
             for raw_embed in message.embeds:
                 if raw_embed.title == embed.title:
-                    print(f"   Debug: Trying to access URL from embed...", flush=True)
-                    
-                    # Method 1: Direct property access
+                    # Try multiple methods to get URL
                     try:
                         if raw_embed.url:
                             product_link = str(raw_embed.url)
-                            print(f"   ✅ Found URL via .url property: {product_link[:60]}...", flush=True)
-                    except Exception as e1:
-                        print(f"   Method 1 failed: {e1}", flush=True)
+                            print(f"   ✅ Found URL: {product_link[:60]}...", flush=True)
+                    except:
+                        pass
                     
-                    # Method 2: to_dict()
                     if not product_link:
                         try:
                             embed_dict = raw_embed.to_dict()
                             if 'url' in embed_dict and embed_dict['url']:
                                 product_link = str(embed_dict['url'])
-                                print(f"   ✅ Found URL via to_dict(): {product_link[:60]}...", flush=True)
-                        except Exception as e2:
-                            print(f"   Method 2 failed: {e2}", flush=True)
-                    
-                    # Method 3: _url private attribute
-                    if not product_link:
-                        try:
-                            if hasattr(raw_embed, '_url') and raw_embed._url:
-                                product_link = str(raw_embed._url)
-                                print(f"   ✅ Found URL via _url: {product_link[:60]}...", flush=True)
-                        except Exception as e3:
-                            print(f"   Method 3 failed: {e3}", flush=True)
-                            
+                                print(f"   ✅ Found URL via dict: {product_link[:60]}...", flush=True)
+                        except:
+                            pass
         except Exception as e:
-            print(f"   ⚠️ Raw message approach failed: {e}", flush=True)
-    
-    print(f"   Description: '{embed.description}'", flush=True)
-    print(f"   Author: '{embed.author.name if embed.author else None}'", flush=True)
-    print(f"   Footer: '{embed.footer.text if embed.footer else None}'", flush=True)
-    print(f"   Number of fields: {len(embed.fields)}", flush=True)
+            print(f"   ⚠️ URL extraction failed: {e}", flush=True)
     
     # Collect all text from embed
     all_text = []
@@ -348,68 +335,62 @@ def extract_product_info(embed, message=None):
     if embed.footer and embed.footer.text:
         all_text.append(('footer', embed.footer.text))
     
-    # Check all fields for any URLs
+    # Check all fields
     for idx, field in enumerate(embed.fields):
-        print(f"   Field {idx}: name='{field.name}' value='{field.value}' inline={field.inline}", flush=True)
         all_text.append((f'field_{idx}_name', field.name))
         all_text.append((f'field_{idx}_value', field.value))
         
-        # Extract ANY URLs from field values (including markdown links)
+        # Extract product links from fields (exclude certain domains)
         if not product_link:
-            # Blacklist of domains to exclude
             excluded_domains = ['stockx.com', 'keepa.com', 'amazon.co', 'amazon.com', 'selleramp.com', 'ebay.com', 'ebay.co.uk', 'snkrdunk.com']
             
-            # Try to find markdown-style links first: [text](url)
+            # Try markdown links first: [text](url)
             markdown_links = re.findall(r'\[([^\]]+)\]\((https?://[^\)]+)\)', field.value)
             for text, url in markdown_links:
-                # Check if URL contains any excluded domain
                 if not any(excluded in url.lower() for excluded in excluded_domains):
                     product_link = url
-                    print(f"   ✅ Found product link in field '{field.name}': {product_link[:60]}...", flush=True)
+                    print(f"   ✅ Found product link: {product_link[:60]}...", flush=True)
                     break
             
-            # If no markdown links found, try plain URLs
+            # Try plain URLs
             if not product_link:
                 urls = re.findall(r'https?://[^\s\)\]]+', field.value)
                 for url in urls:
                     if not any(excluded in url.lower() for excluded in excluded_domains):
                         product_link = url
-                        print(f"   ✅ Found product link in field '{field.name}': {product_link[:60]}...", flush=True)
+                        print(f"   ✅ Found product link: {product_link[:60]}...", flush=True)
                         break
     
-    # Search for first price in all collected text
-    print(f"   Searching for price in {len(all_text)} text pieces...", flush=True)
-    
-    # Prioritize "Price" field over other fields
+    # Search for price - prioritize "Price" field
     price_field_text = None
     for location, text in all_text:
         if 'field_' in location and 'name' in location:
             idx = location.split('_')[1]
             value_location = f'field_{idx}_value'
-            # Check if this is a "Price" field
             if text and 'price' in str(text).lower():
                 for loc2, text2 in all_text:
                     if loc2 == value_location:
                         price_field_text = (value_location, text2)
                         break
     
-    # If we found a Price field, search that first
+    # Build search order
     search_order = []
     if price_field_text:
         search_order.append(price_field_text)
     search_order.extend([item for item in all_text if item != price_field_text])
     
+    # Extract price
     for location, text in search_order:
         if text:
             text_str = str(text)
-            # Skip "Notice" or "Resell" fields that might have estimated prices
+            
+            # Skip notice/resell fields
             if 'notice' in location.lower() or 'resell' in text_str.lower():
                 continue
             
-            # Try to extract price - check for multiple formats
             price_found = False
             
-            # Format 1: "48.0 GBP" or "140.0 USD" (number then currency code with space)
+            # Format 1: "48.0 GBP" or "140.0 USD"
             space_currency_match = re.search(r'(\d{1,3}(?:,?\d{3})*(?:\.\d{1,2})?)\s+(GBP|USD|EUR)', text_str, re.IGNORECASE)
             if space_currency_match:
                 try:
@@ -417,24 +398,21 @@ def extract_product_info(embed, message=None):
                     currency = space_currency_match.group(2).upper()
                     price = float(price_str)
                     
-                    # Reasonable price check
                     if 0.1 <= price < 100000:
-                        # Convert to GBP if not already
                         if currency != 'GBP':
                             original_price = price
                             price = price * EXCHANGE_RATES[currency]
-                            print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
+                            print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f})", flush=True)
                         else:
-                            print(f"   ✅ Found price £{price:.2f} in {location}", flush=True)
+                            print(f"   ✅ Found price £{price:.2f}", flush=True)
                         buy_price = price
                         price_found = True
-                except Exception as e:
-                    print(f"   Failed to parse space-separated currency from {location}: {e}", flush=True)
+                except:
+                    pass
             
-            # Format 2: Standard patterns (£0.7, $10.50, etc.)
+            # Format 2: Standard patterns
             if not price_found:
                 for currency, pattern in PRICE_PATTERNS.items():
-                    # Check if currency symbol/code is in the text
                     has_currency = False
                     if currency == 'GBP' and ('£' in text_str or 'GBP' in text_str):
                         has_currency = True
@@ -448,38 +426,32 @@ def extract_product_info(embed, message=None):
                         if matches:
                             try:
                                 price = float(matches[0].replace(',', ''))
-                                # Reasonable price check (lowered minimum for cards like £0.7)
                                 if 0.1 <= price < 100000:
-                                    # Convert to GBP if not already
                                     if currency != 'GBP':
                                         original_price = price
                                         price = price * EXCHANGE_RATES[currency]
-                                        print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f} GBP) in {location}", flush=True)
+                                        print(f"   ✅ Found price {currency} {original_price:.2f} (£{price:.2f})", flush=True)
                                     else:
-                                        print(f"   ✅ Found price £{price:.2f} in {location}", flush=True)
+                                        print(f"   ✅ Found price £{price:.2f}", flush=True)
                                     buy_price = price
                                     price_found = True
                                     break
-                            except Exception as e:
-                                print(f"   Failed to parse price from {location}: {e}", flush=True)
+                            except:
                                 continue
             
             if buy_price:
                 break
     
     if not buy_price:
-        print(f"   ❌ NO PRICE FOUND!", flush=True)
-        print(f"   Checked locations: {[loc for loc, _ in all_text]}", flush=True)
+        print(f"   ⚠️ No price found", flush=True)
     
     if not product_link:
         print(f"   ⚠️ No product link found", flush=True)
     
-    print(f"   === END DEBUG ===", flush=True)
-    
     return product_name, buy_price, product_link
 
 async def create_alert_embed(original_embed, source_message, ebay_data=None, resell_price=None, sold_count=0):
-    """Calculate profit data (no embed needed anymore)"""
+    """Calculate profit data"""
     
     # Extract product info
     product_name, buy_price, product_link = extract_product_info(original_embed, source_message)
@@ -490,7 +462,6 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     if not buy_price:
         buy_price = 0
     
-    # Determine actual cost basis
     actual_cost = buy_price
     
     # Calculate profit
@@ -501,23 +472,19 @@ async def create_alert_embed(original_embed, source_message, ebay_data=None, res
     
     return None, profit, sold_count
 
-def create_initial_embed(original_embed, message=None):
-    """No initial embed needed - just return None"""
-    return None
-
 @bot.event
 async def on_ready():
     print(f'{bot.user} is now monitoring for deals!', flush=True)
     print(f'Monitoring {len(MONITORED_CHANNELS)} channel(s):', flush=True)
     for channel_id, role_id in MONITORED_CHANNELS.items():
         print(f'  • Channel {channel_id} → Role {role_id}', flush=True)
-    print(f'Using Selenium with ChromeDriver for eBay scraping', flush=True)
-    print(f'Exchange Rate API: {"✓ Configured" if EXCHANGE_RATE_API_KEY else "✗ Not configured"}', flush=True)
+    print(f'Using modern eBay scraping (no Selenium needed!)', flush=True)
+    print(f'Exchange Rate API: Hardcoded (no env variable needed)', flush=True)
     
     # Fetch exchange rates on startup
     await fetch_exchange_rates()
     
-    print('Bot is ready and waiting for embeds...', flush=True)
+    print('✅ Bot is ready!', flush=True)
 
 @bot.event
 async def on_message(message):
@@ -529,38 +496,31 @@ async def on_message(message):
     if message.author == bot.user:
         return
     
-    # CRITICAL: Only process messages with embeds
+    # Only process messages with embeds
     if not message.embeds or len(message.embeds) == 0:
         return
     
-    # Additional safety check: Ignore regular user messages (only process bot messages with embeds)
-    # Most alert bots are bots, not regular users
+    # Skip regular user messages
     if not message.author.bot and message.content:
-        # If it's a regular user with text content, skip
         return
     
-    # Get the role for this specific channel
+    # Get the role for this channel
     role_id = MONITORED_CHANNELS[message.channel.id]
     
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
-    print(f"📨 Message received in monitored channel!", flush=True)
-    print(f"   Channel ID: {message.channel.id}", flush=True)
-    print(f"   Role ID: {role_id}", flush=True)
-    print(f"   Author: {message.author} (Bot: {message.author.bot})", flush=True)
-    print(f"   Has embeds: {len(message.embeds)}", flush=True)
-    print(f"✅ Processing {len(message.embeds)} embed(s)!", flush=True)
+    print(f"📨 New embed detected!", flush=True)
+    print(f"   Channel: {message.channel.id} → Role: {role_id}", flush=True)
     print(f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━", flush=True)
     
     for embed in message.embeds:
         try:
-            # STEP 1: IMMEDIATE PING - Extract minimal info and send ASAP
+            # STEP 1: IMMEDIATE PING
             role = message.guild.get_role(role_id)
             
-            # Quick extraction - just get title for initial ping
             product_name = embed.title if embed.title else "Unknown Product"
             product_name_clean = clean_product_name(product_name)
             
-            # Try to get URL quickly
+            # Get URL quickly
             product_link = None
             try:
                 if embed.url:
@@ -568,32 +528,28 @@ async def on_message(message):
             except:
                 pass
             
-            # Send ping IMMEDIATELY with bold title
+            # Send ping IMMEDIATELY
             if role:
                 alert_content = f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**\n{role.mention}"
             else:
                 alert_content = f"**{product_name_clean}**\n**🚨 NEW DEAL ALERT**"
             
-            # Add product link on new line if available (wrapped to prevent preview)
             if product_link:
                 alert_content += f"\n<{product_link}>"
             
             alert_message = await message.channel.send(content=alert_content)
             
-            print("⚡ INSTANT ping sent!", flush=True)
+            print("⚡ Instant ping sent!", flush=True)
             
-            # STEP 2: Don't add any embed initially, just search eBay
-            print("✅ Initial message sent, now searching eBay...", flush=True)
+            # STEP 2: Search eBay
+            product_name_full, buy_price, _ = extract_product_info(embed, message)
             
-            # STEP 3: Search eBay using Selenium
-            product_name, buy_price, _ = extract_product_info(embed, message)
+            ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices(product_name_full)
             
-            ebay_data, resell_price, sold_count = await scrape_ebay_sold_prices_selenium(product_name)
-            
-            # STEP 4: Edit the message with final status (no embed)
+            # STEP 3: Update with results
             final_embed, profit, sold_count = await create_alert_embed(embed, message, ebay_data, resell_price, sold_count)
             
-            # Update the content based on results - include profit amount inline
+            # Determine alert status
             if sold_count == 0:
                 alert_status = "⚠️ NO SALES DATA - RESEARCH REQUIRED"
             elif profit > 50:
@@ -604,43 +560,36 @@ async def on_message(message):
                 alert_status = f"💼 SMALL PROFIT (£{profit:.2f})"
             else:
                 if ebay_data:
-                    # Show loss amount
                     loss = abs(profit)
                     alert_status = f"⚠️ LOW/NO PROFIT (-£{loss:.2f})"
                 else:
                     alert_status = "⚠️ NO SALES DATA"
             
-            # Get the product info for final edit
-            product_name_final = embed.title if embed.title else "Unknown Product"
-            product_name_final_clean = clean_product_name(product_name_final)
-            
-            # Edit main message with profit status - no embed
+            # Update message
             if role:
-                final_content = f"**{product_name_final_clean}**\n**{alert_status}**\n{role.mention}"
+                final_content = f"**{product_name_clean}**\n**{alert_status}**\n{role.mention}"
             else:
-                final_content = f"**{product_name_final_clean}**\n**{alert_status}**"
+                final_content = f"**{product_name_clean}**\n**{alert_status}**"
             
-            # Add product link on new line if available (wrapped to prevent preview)
             if product_link:
                 final_content += f"\n<{product_link}>"
             
             await alert_message.edit(content=final_content)
             
-            print("✅ Message updated with full analysis!", flush=True)
+            print("✅ Updated with analysis!", flush=True)
         
         except Exception as e:
-            print(f"Error processing embed: {e}", flush=True)
+            print(f"❌ Error: {e}", flush=True)
             import traceback
             traceback.print_exc()
-            continue
 
 @bot.event
 async def on_connect():
-    print("Bot connected to Discord!", flush=True)
+    print("✅ Connected to Discord!", flush=True)
 
 if __name__ == "__main__":
     if not DISCORD_TOKEN:
-        print("ERROR: DISCORD_TOKEN environment variable not set!")
+        print("❌ ERROR: DISCORD_TOKEN not set!")
         exit(1)
     
     bot.run(DISCORD_TOKEN)
